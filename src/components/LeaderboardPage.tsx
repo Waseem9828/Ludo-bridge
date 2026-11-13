@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowRight, Crown, Flame, Medal, Trophy } from 'lucide-react';
+import { Crown, Flame, Medal, Trophy } from 'lucide-react';
 import {
   getMockLeaderboardData,
   type AvatarId,
@@ -13,7 +13,6 @@ interface LeaderboardPageProps {
   playerName: string;
   avatarId: AvatarId;
   hub: HubSnapshot;
-  onEnterLobby: () => void;
   onOpenProfile: () => void;
 }
 
@@ -27,7 +26,6 @@ export function LeaderboardPage({
   playerName,
   avatarId,
   hub,
-  onEnterLobby,
   onOpenProfile,
 }: LeaderboardPageProps) {
   const [period, setPeriod] = useState<LeaderboardPeriod>('weekly');
@@ -232,24 +230,16 @@ export function LeaderboardPage({
         aria-label="Ranked players"
         className="rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] p-4 sm:p-6 text-white shadow-emerald-card space-y-4"
       >
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-baseline justify-between gap-2">
+          <div className="flex items-center gap-2">
             <Trophy className="h-4 w-4 text-[#FCD34D] shrink-0" aria-hidden="true" />
-            <h2 className="font-display text-base sm:text-lg font-bold text-white truncate">
+            <h2 className="font-display text-base sm:text-lg font-bold text-white">
               Standings
             </h2>
-            <span className="text-[11px] sm:text-xs font-medium text-white/75 tabular-nums whitespace-nowrap shrink-0">
-              · {entries.length}
-            </span>
           </div>
-          <button
-            type="button"
-            onClick={onEnterLobby}
-            className="min-h-[34px] sm:min-h-[36px] inline-flex items-center gap-1 rounded-full bg-white px-3 sm:px-4 py-1.5 text-[11px] sm:text-xs font-bold text-[#064E3B] shadow-pill-btn hover:bg-[#FAF9F5] whitespace-nowrap shrink-0"
-          >
-            <span>Play Battle</span>
-            <ArrowRight className="h-3 w-3 sm:h-3.5 sm:w-3.5" aria-hidden="true" />
-          </button>
+          <span className="text-xs font-medium text-white/75 tabular-nums whitespace-nowrap shrink-0">
+            {entries.length} players
+          </span>
         </div>
 
         <div className="space-y-2.5">

@@ -14,6 +14,7 @@ import {
   mergeAnimatedBattles,
   normalizeLobbyCode,
   pickOpponentColor,
+  sumBattleAmounts,
   validateBattleAmount,
   validateCancelReason,
   validateLudoKingCode,
@@ -320,3 +321,13 @@ test('getMockLeaderboardData ranks players descending by earnings and includes c
   assert.equal(allTime.length, 12);
   assert.notEqual(weekly[0].playerName, monthly[0].playerName);
 });
+
+test('sumBattleAmounts sums seeded open and running battle amounts accurately', () => {
+  const store = createInitialMockStore(1_700_000_000_000);
+  const snapshot = buildHubSnapshotFromStore(store);
+  assert.equal(sumBattleAmounts(snapshot.openLobbies), 6100);
+  assert.equal(sumBattleAmounts(snapshot.runningBattles), 4050);
+  assert.equal(sumBattleAmounts([{ amount: 100 }, { amount: 250 }]), 350);
+  assert.equal(sumBattleAmounts([]), 0);
+});
+

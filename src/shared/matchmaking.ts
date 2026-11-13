@@ -611,3 +611,9 @@ export function getMockLeaderboardData(
     });
 }
 
+export function sumBattleAmounts(rooms: Array<Pick<MatchRoom, 'amount'>>): number {
+  return rooms.reduce(
+    (sum, room) => sum + (Number.isFinite(room.amount) && room.amount > 0 ? room.amount : 0),
+    0
+  );
+}

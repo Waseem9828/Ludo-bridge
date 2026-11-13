@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
   ArrowDownLeft,
-  ArrowRight,
   ArrowUpRight,
   Gamepad2,
   Gift,
@@ -23,7 +22,6 @@ interface HistoryPageProps {
   loadingHub: boolean;
   walletTransactions: WalletTransaction[];
   playerName: string;
-  onEnterLobby: () => void;
 }
 
 export function HistoryPage({
@@ -31,7 +29,6 @@ export function HistoryPage({
   loadingHub,
   walletTransactions,
   playerName,
-  onEnterLobby,
 }: HistoryPageProps) {
   const [activeFilter, setActiveFilter] = useState<HistoryFilter>('games');
 
@@ -122,23 +119,13 @@ export function HistoryPage({
       </div>
 
       <section className="rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] p-5 sm:p-6 text-white shadow-emerald-card space-y-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-baseline gap-2 min-w-0">
-            <h2 className="font-display text-base sm:text-lg font-bold text-white truncate">
-              {sectionHeading}
-            </h2>
-            <span className="text-[11px] sm:text-xs font-medium text-white/75 tabular-nums whitespace-nowrap shrink-0">
-              · {activeCount}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onEnterLobby}
-            className="min-h-[34px] sm:min-h-[36px] inline-flex items-center gap-1 rounded-full bg-white px-3 sm:px-4 py-1.5 text-[11px] sm:text-xs font-bold text-[#064E3B] shadow-pill-btn hover:bg-[#FAF9F5] whitespace-nowrap shrink-0"
-          >
-            <span>Play Battle</span>
-            <ArrowRight className="h-3 w-3 sm:h-3.5 sm:w-3.5" aria-hidden="true" />
-          </button>
+        <div className="flex items-baseline justify-between gap-2">
+          <h2 className="font-display text-base sm:text-lg font-bold text-white">
+            {sectionHeading}
+          </h2>
+          <span className="text-xs font-medium text-white/75 tabular-nums whitespace-nowrap shrink-0">
+            {activeCount} {activeCount === 1 ? 'record' : 'records'}
+          </span>
         </div>
 
         {activeFilter === 'games' ? (

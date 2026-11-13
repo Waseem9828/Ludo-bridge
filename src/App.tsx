@@ -8,7 +8,6 @@ import {
   markMatchStarted,
   reportWinner,
   requestRematch,
-  sendRoomChat,
   submitLudoKingCode,
   toggleReady,
 } from './api/matchmakingClient';
@@ -698,14 +697,6 @@ export default function App() {
               const { room } = await requestRematch(activeRoom.code);
               setActiveRoom(room);
             }}
-            onSendChat={async (text) => {
-              const { room } = await sendRoomChat(
-                activeRoom.code,
-                activePlayerId,
-                text
-              );
-              setActiveRoom(room);
-            }}
             onCancelJoin={async (reason) => {
               await handleLeaveRoom(reason);
             }}
@@ -749,7 +740,6 @@ export default function App() {
             hub={hub}
             onSavePlayerName={handleSavePlayerName}
             onSaveAvatar={handleSaveAvatar}
-            onEnterLobby={navigateLobby}
             onOpenLeaderboard={() => navigateToRoute('leaderboard')}
           />
         ) : view === 'history' ? (
@@ -758,14 +748,12 @@ export default function App() {
             loadingHub={loadingHub}
             walletTransactions={wallet.transactions}
             playerName={playerName}
-            onEnterLobby={navigateLobby}
           />
         ) : view === 'leaderboard' ? (
           <LeaderboardPage
             playerName={playerName}
             avatarId={avatarId}
             hub={hub}
-            onEnterLobby={navigateLobby}
             onOpenProfile={() => navigateToRoute('profile')}
           />
         ) : view === 'referral' ? (

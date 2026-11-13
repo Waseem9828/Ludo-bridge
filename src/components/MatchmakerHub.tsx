@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowRight, Check, Copy, Trash2 } from 'lucide-react';
+import { ArrowRight, Trash2 } from 'lucide-react';
 import {
   mergeAnimatedBattles,
+  sumBattleAmounts,
   validateBattleAmount,
   type AnimatedBattleEntry,
   type AvatarId,
@@ -35,7 +36,6 @@ export function MatchmakerHub({
   const [actionErrorMsg, setActionErrorMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [busyCode, setBusyCode] = useState<string | null>(null);
-  const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   const [openEntries, setOpenEntries] = useState<AnimatedBattleEntry[]>(() =>
     hub.openLobbies.map((room) => ({ room, exiting: false }))
@@ -45,6 +45,8 @@ export function MatchmakerHub({
   );
 
   const amountInputRef = useRef<HTMLInputElement | null>(null);
+  const openTotalAmount = sumBattleAmounts(hub.openLobbies);
+  const runningTotalAmount = sumBattleAmounts(hub.runningBattles);
 
   useEffect(() => {
     let timer: number | undefined;
@@ -122,22 +124,6 @@ export function MatchmakerHub({
       setActionErrorMsg(err instanceof Error ? err.message : 'Could not delete battle.');
     } finally {
       setBusyCode(null);
-    }
-  };
-
-  const handleCopyInvite = async (code: string) => {
-    const url =
-      typeof window !== 'undefined'
-        ? `${window.location.origin}/?join=${code}`
-        : `/?join=${code}`;
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopiedCode(code);
-      window.setTimeout(() => {
-        setCopiedCode((prev) => (prev === code ? null : prev));
-      }, 2000);
-    } catch {
-      // Clipboard unavailable in restricted contexts
     }
   };
 
@@ -230,8 +216,14 @@ export function MatchmakerHub({
               <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight text-white">
                 Open Battles
               </h2>
-              <span className="text-xs font-medium text-white/75 tabular-nums">
-                {hub.openLobbies.length} waiting
+              <span
+                data-testid="open-battles-summary"
+                className="text-xs font-medium text-white/80 tabular-nums whitespace-nowrap shrink-0"
+              >
+                {hub.openLobbies.length} waiting ·{' '}
+                <span className="font-bold text-[#FCD34D]">
+                  ₹{openTotalAmount.toLocaleString('en-IN')}
+                </span>
               </span>
             </div>
 
@@ -259,7 +251,7 @@ export function MatchmakerHub({
                     <div
                       key={lobby.code}
                       data-testid={`open-battle-${lobby.code}`}
-                      className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/15 bg-white/10 px-4 py-3 shadow-sm backdrop-blur-xs ${
+                      className={`flex items-center justify-between gap-3 rounded-xl border border-white/15 bg-white/10 px-4 py-3 shadow-sm backdrop-blur-xs ${
                         exiting ? 'animate-battle-out pointer-events-none' : 'animate-battle-in'
                       }`}
                     >
@@ -275,46 +267,40 @@ export function MatchmakerHub({
                           <p className="text-sm font-bold text-white tabular-nums">
                             Amount ₹{lobby.amount.toLocaleString('en-IN')}
                           </p>
-                          <p className="mt-0.5 text-xs text-white/80 tabular-nums truncate">
-                            {host.name}
-                            {' · '}
-                            <span className="font-mono text-[#FCD34D]">{lobby.code}</span>
-                            {ownPlayerId ? ' · Your Battle' : ''}
-                          </p>
+                          {ownPlayerId ? (
+                            <p className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-[#FCD34D] truncate">
+                              <span
+                                data-testid="finding-player-spinner"
+                                className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-[#FCD34D]/35 border-t-[#FCD34D]"
+                                aria-hidden="true"
+                              />
+                              <span>Finding player</span>
+                            </p>
+                          ) : (
+                            <p className="mt-0.5 text-xs text-white/80 truncate">
+                              {host.name}
+                            </p>
+                          )}
                         </div>
                       </div>
 
                       {ownPlayerId ? (
-                        <div className="flex items-center gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleCopyInvite(lobby.code)}
-                            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-full bg-white/15 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-white/25 whitespace-nowrap"
-                          >
-                            {copiedCode === lobby.code ? (
-                              <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                            ) : (
-                              <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-                            )}
-                            <span>{copiedCode === lobby.code ? 'Copied' : 'Copy Invite'}</span>
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isBusy}
-                            onClick={() => handleDeleteBattle(lobby.code, ownPlayerId)}
-                            aria-label={`Delete battle ${lobby.code}`}
-                            className="inline-flex min-h-[38px] items-center gap-1 rounded-full bg-white px-3.5 py-1.5 text-xs font-bold text-[#991B1B] shadow-pill-btn hover:bg-[#FAF9F5] disabled:opacity-60 whitespace-nowrap"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                            <span>Delete</span>
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => handleDeleteBattle(lobby.code, ownPlayerId)}
+                          aria-label={`Delete battle for ₹${lobby.amount}`}
+                          className="inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-full bg-white px-4 py-1.5 text-xs font-bold text-[#991B1B] shadow-pill-btn transition-colors hover:bg-[#FAF9F5] disabled:opacity-60 whitespace-nowrap shrink-0"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>{isBusy ? 'Deleting...' : 'Delete'}</span>
+                        </button>
                       ) : (
                         <button
                           type="button"
                           disabled={isBusy}
                           onClick={() => handleAcceptBattle(lobby.code)}
-                          aria-label={`Play battle for ₹${lobby.amount} (${lobby.code})`}
+                          aria-label={`Play battle for ₹${lobby.amount}`}
                           className="min-h-[38px] rounded-full bg-white px-5 py-1.5 text-xs font-bold text-[#064E3B] shadow-pill-btn transition-colors hover:bg-[#FAF9F5] disabled:opacity-60 whitespace-nowrap shrink-0"
                         >
                           {isBusy ? 'Joining...' : 'Play'}
@@ -336,8 +322,14 @@ export function MatchmakerHub({
               <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight text-white">
                 Running Battles
               </h2>
-              <span className="text-xs font-medium text-white/75 tabular-nums">
-                {hub.runningBattles.length} active
+              <span
+                data-testid="running-battles-summary"
+                className="text-xs font-medium text-white/80 tabular-nums whitespace-nowrap shrink-0"
+              >
+                {hub.runningBattles.length} active ·{' '}
+                <span className="font-bold text-[#FCD34D]">
+                  ₹{runningTotalAmount.toLocaleString('en-IN')}
+                </span>
               </span>
             </div>
 

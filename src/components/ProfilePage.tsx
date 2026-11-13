@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { ArrowRight, Check, Trophy } from 'lucide-react';
+import { Check, Trophy } from 'lucide-react';
 import { AVATAR_OPTIONS } from '../assets/avatars';
 import {
   validatePlayerName,
@@ -15,7 +15,6 @@ interface ProfilePageProps {
   hub: HubSnapshot;
   onSavePlayerName: (name: string) => void;
   onSaveAvatar: (avatarId: AvatarId) => void;
-  onEnterLobby: () => void;
   onOpenLeaderboard: () => void;
 }
 
@@ -25,7 +24,6 @@ export function ProfilePage({
   hub,
   onSavePlayerName,
   onSaveAvatar,
-  onEnterLobby,
   onOpenLeaderboard,
 }: ProfilePageProps) {
   const [nameInput, setNameInput] = useState(playerName);
@@ -179,15 +177,7 @@ export function ProfilePage({
             </dl>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <button
-              type="button"
-              onClick={onEnterLobby}
-              className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 rounded-full bg-white px-4 py-2.5 text-xs font-bold text-[#064E3B] shadow-pill-btn hover:bg-[#FAF9F5] whitespace-nowrap"
-            >
-              <span>Play Lobby</span>
-              <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-            </button>
+          <div>
             <button
               type="button"
               onClick={onOpenLeaderboard}
