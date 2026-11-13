@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { ArrowRight, Lock, Megaphone } from 'lucide-react';
+import classicHeroImg from '../assets/images/ludo_tabletop_hero_1794536790290.jpg';
+import popularPawnImg from '../assets/images/ludo_pawn_crimson_1794536789653.jpg';
 
 interface HomePageProps {
   onEnterClassicLobby: () => void;
@@ -42,7 +44,7 @@ export function HomePage({ onEnterClassicLobby }: HomePageProps) {
                 </div>
               ) : (
                 <img
-                  src="/src/assets/images/ludo_tabletop_hero_1794536790290.jpg"
+                  src={classicHeroImg}
                   alt="Ludo Classic wooden pawns and dice"
                   referrerPolicy="no-referrer"
                   onError={() => setClassicImgFailed(true)}
@@ -76,7 +78,7 @@ export function HomePage({ onEnterClassicLobby }: HomePageProps) {
                 </div>
               ) : (
                 <img
-                  src="/src/assets/images/ludo_pawn_crimson_1794536789653.jpg"
+                  src={popularPawnImg}
                   alt="Ludo Popular pawn preview"
                   referrerPolicy="no-referrer"
                   onError={() => setPopularImgFailed(true)}

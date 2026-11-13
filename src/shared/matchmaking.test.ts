@@ -18,6 +18,7 @@ import {
   type MatchRoom,
   type WalletTransaction,
 } from './matchmaking';
+import { buildHubSnapshotFromStore, createInitialMockStore } from './mockStore';
 
 test('pickOpponentColor selects opposite corner in 2-player Ludo King', () => {
   assert.equal(pickOpponentColor('Red'), 'Yellow');
@@ -271,4 +272,15 @@ test('mergeAnimatedBattles marks removed battles as exiting while keeping new on
   assert.equal(merged.entries[1].exiting, false);
   assert.equal(merged.entries[2].room.code, 'C3');
   assert.equal(merged.entries[2].exiting, false);
+});
+
+test('createInitialMockStore and buildHubSnapshotFromStore expose seeded battles and history', () => {
+  const store = createInitialMockStore(1_700_000_000_000);
+  const snapshot = buildHubSnapshotFromStore(store);
+  assert.equal(snapshot.openLobbies.length, 8);
+  assert.equal(snapshot.runningBattles.length, 6);
+  assert.equal(snapshot.recentMatches.length, 10);
+  assert.equal(snapshot.stats.openCount, 8);
+  assert.equal(snapshot.stats.activeMatchesCount, 6);
+  assert.equal(snapshot.stats.completedCount, 10);
 });

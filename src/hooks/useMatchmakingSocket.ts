@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isStaticFallbackActive } from '../api/matchmakingClient';
 import type { HubSnapshot, MatchRoom } from '../shared/matchmaking';
 
 interface UseMatchmakingSocketOptions {
@@ -28,6 +29,7 @@ export function useMatchmakingSocket({
   useEffect(() => {
     let active = true;
     let reconnectTimer: number | undefined;
+    let failedAttempts = 0;
 
     const sendSubscription = (ws: WebSocket) => {
       if (ws.readyState !== WebSocket.OPEN) return;
@@ -46,13 +48,19 @@ export function useMatchmakingSocket({
     };
 
     const connect = () => {
-      if (!active) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+      if (!active || isStaticFallbackActive() || failedAttempts >= 2) return;
+      let ws: WebSocket;
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+      } catch {
+        return;
+      }
       wsRef.current = ws;
 
       ws.onopen = () => {
         if (!active) return;
+        failedAttempts = 0;
         setConnected(true);
         sendSubscription(ws);
       };
@@ -79,7 +87,10 @@ export function useMatchmakingSocket({
       ws.onclose = () => {
         if (!active) return;
         setConnected(false);
-        reconnectTimer = window.setTimeout(connect, 1500);
+        failedAttempts += 1;
+        if (!isStaticFallbackActive() && failedAttempts < 2) {
+          reconnectTimer = window.setTimeout(connect, 1500);
+        }
       };
 
       ws.onerror = () => {
