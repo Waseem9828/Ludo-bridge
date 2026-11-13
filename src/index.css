@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --shadow-emerald-card: 0 18px 35px rgba(0, 0, 0, 0.14);
+  --shadow-peach-card: 0 18px 35px rgba(0, 0, 0, 0.14);
+  --shadow-surface-card: 0 18px 35px rgba(0, 0, 0, 0.14);
+  --shadow-pill-btn: 0 4px 10px rgba(0, 0, 0, 0.15);
+  --shadow-emerald-btn: 0 8px 20px rgba(0, 0, 0, 0.14);
+}
+
+@layer base {
+  html,
+  body {
+    font-family: var(--font-sans);
+    background-color: #f8f7f4;
+    color: #16181d;
+    scroll-behavior: smooth;
+    overflow-x: clip;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes battleSlideInLeft {
+  0% {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes battleSlideOutLeft {
+  0% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-36px);
+  }
+}
+
+.animate-battle-in {
+  animation: battleSlideInLeft 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-battle-out {
+  animation: battleSlideOutLeft 260ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

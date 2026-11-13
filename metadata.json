@@ -1,0 +1,6 @@
+{
+  "name": "LudoBridge",
+  "description": "Online 2-player matchmaking and room code handoff platform for playing Ludo King with friends.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
