@@ -7,10 +7,13 @@ import {
   Home,
   Receipt,
   RotateCcw,
+  Trophy,
   User,
   Wallet,
   X,
 } from 'lucide-react';
+import type { AvatarId } from '../shared/matchmaking';
+import { PlayerAvatar } from './PlayerAvatar';
 
 export type AppViewRoute =
   | 'home'
@@ -21,6 +24,7 @@ export type AppViewRoute =
   | 'wallet-withdraw'
   | 'profile'
   | 'history'
+  | 'leaderboard'
   | 'referral'
   | 'terms'
   | 'gst-policy'
@@ -30,6 +34,7 @@ interface SidebarDrawerProps {
   open: boolean;
   currentView: AppViewRoute;
   playerName: string;
+  avatarId: AvatarId;
   onClose: () => void;
   onNavigate: (route: Exclude<AppViewRoute, 'room'>) => void;
 }
@@ -42,6 +47,7 @@ const PRIMARY_ITEMS: Array<{
 }> = [
   { route: 'home', label: 'Home', path: '/', Icon: Home },
   { route: 'lobby', label: 'Play / Lobby', path: '/lobby', Icon: Gamepad2 },
+  { route: 'leaderboard', label: 'Leaderboard', path: '/leaderboard', Icon: Trophy },
   { route: 'wallet', label: 'Wallet', path: '/wallet', Icon: Wallet },
   { route: 'profile', label: 'Profile', path: '/profile', Icon: User },
   { route: 'history', label: 'History', path: '/history', Icon: History },
@@ -63,6 +69,7 @@ export function SidebarDrawer({
   open,
   currentView,
   playerName,
+  avatarId,
   onClose,
   onNavigate,
 }: SidebarDrawerProps) {
@@ -116,9 +123,7 @@ export function SidebarDrawer({
             onClick={() => handleSelect('profile')}
             className="flex w-full items-center gap-3 rounded-xl bg-white p-3 text-left shadow-xs transition-colors hover:bg-[#FAF9F5]"
           >
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#0D7A5F] text-sm font-bold text-white shrink-0">
-              {playerName.slice(0, 1).toUpperCase()}
-            </div>
+            <PlayerAvatar name={playerName} avatarId={avatarId} size="sm" />
             <div className="min-w-0">
               <p className="truncate text-sm font-bold text-[#16181D]">{playerName}</p>
               <p className="text-xs text-[#5A606D]">View &amp; edit profile</p>

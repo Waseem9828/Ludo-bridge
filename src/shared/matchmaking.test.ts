@@ -2,11 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyRematchReset,
+  AVATAR_IDS,
   CANCEL_JOIN_REASONS,
   computeMatchStatus,
   filterWalletTransactions,
   formatLudoKingCode,
+  getAvatarIdForName,
+  getMockLeaderboardData,
   getMockReferralHistory,
+  isValidAvatarId,
   mergeAnimatedBattles,
   normalizeLobbyCode,
   pickOpponentColor,
@@ -283,4 +287,36 @@ test('createInitialMockStore and buildHubSnapshotFromStore expose seeded battles
   assert.equal(snapshot.stats.openCount, 8);
   assert.equal(snapshot.stats.activeMatchesCount, 6);
   assert.equal(snapshot.stats.completedCount, 10);
+});
+
+test('getAvatarIdForName deterministically assigns valid avatars', () => {
+  assert.equal(isValidAvatarId('emerald-ace'), true);
+  assert.equal(isValidAvatarId('unknown-avatar'), false);
+  const a1 = getAvatarIdForName('Meera');
+  const a2 = getAvatarIdForName(' meera ');
+  assert.equal(a1, a2);
+  assert.ok(AVATAR_IDS.includes(a1));
+});
+
+test('getMockLeaderboardData ranks players descending by earnings and includes current player', () => {
+  const weekly = getMockLeaderboardData('weekly', {
+    name: 'Player 777',
+    avatarId: 'royal-tiger',
+    matchesPlayed: 2,
+    wins: 1,
+    totalEarnings: 250,
+  });
+  assert.equal(weekly.length, 13);
+  assert.equal(weekly[0].rank, 1);
+  assert.ok(weekly[0].totalEarnings >= weekly[1].totalEarnings);
+  const self = weekly.find((e) => e.isCurrentUser);
+  assert.ok(self);
+  assert.equal(self?.avatarId, 'royal-tiger');
+  assert.ok((self?.winRate ?? 0) > 0);
+
+  const monthly = getMockLeaderboardData('monthly');
+  const allTime = getMockLeaderboardData('all_time');
+  assert.equal(monthly.length, 12);
+  assert.equal(allTime.length, 12);
+  assert.notEqual(weekly[0].playerName, monthly[0].playerName);
 });

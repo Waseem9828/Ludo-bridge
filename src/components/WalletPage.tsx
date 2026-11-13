@@ -1,4 +1,5 @@
 import { ArrowDownLeft, ArrowRight, ArrowUpRight } from 'lucide-react';
+import { PageTitleHeading } from './PageTitleHeading';
 
 interface WalletPageProps {
   onOpenDeposit: () => void;
@@ -11,15 +12,7 @@ export function WalletPage({ onOpenDeposit, onOpenWithdraw }: WalletPageProps) {
       className="w-full px-4 py-5 sm:px-8 sm:py-8 space-y-5 sm:space-y-6"
       data-testid="wallet-page"
     >
-      <div className="space-y-1">
-        <p className="text-xs font-semibold text-[#0D7A5F]">Wallet Actions</p>
-        <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-[#16181D]">
-          Wallet
-        </h1>
-        <p className="text-xs sm:text-sm text-[#5A606D]">
-          Choose Deposit or Withdraw to open its page.
-        </p>
-      </div>
+      <PageTitleHeading title="Wallet" />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-6 items-stretch">
         {/* Deposit Card */}

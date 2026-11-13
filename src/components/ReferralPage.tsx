@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Check, Copy, Gift, Share2 } from 'lucide-react';
+import { PageTitleHeading } from './PageTitleHeading';
 
 interface ReferralPageProps {
   playerName: string;
@@ -36,15 +37,7 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
 
   return (
     <div className="w-full px-4 py-5 sm:px-8 sm:py-8 space-y-6" data-testid="referral-page">
-      <div className="space-y-1">
-        <p className="text-xs font-semibold text-[#0D7A5F]">Invite Friends</p>
-        <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-[#16181D]">
-          Refer &amp; Play Together
-        </h1>
-        <p className="text-xs sm:text-sm text-[#5A606D]">
-          Share your referral code or invite link so friends can join your 2-player Ludo Classic battles.
-        </p>
-      </div>
+      <PageTitleHeading title="Refer & Play Together" />
 
       <div className="grid gap-5 md:grid-cols-12 items-stretch">
         <section className="md:col-span-7 rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] p-5 sm:p-6 text-white shadow-emerald-card space-y-5">

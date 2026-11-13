@@ -452,3 +452,162 @@ export function describeMatchStatus(status: MatchStatus): {
       };
   }
 }
+
+export const AVATAR_IDS = [
+  'emerald-ace',
+  'crimson-striker',
+  'amber-king',
+  'sapphire-queen',
+  'royal-tiger',
+] as const;
+
+export type AvatarId = (typeof AVATAR_IDS)[number];
+
+export function isValidAvatarId(value: string | null | undefined): value is AvatarId {
+  return Boolean(value && (AVATAR_IDS as readonly string[]).includes(value));
+}
+
+export function getAvatarIdForName(name: string): AvatarId {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) return AVATAR_IDS[0];
+  let hash = 0;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = (hash * 31 + normalized.charCodeAt(i)) >>> 0;
+  }
+  return AVATAR_IDS[hash % AVATAR_IDS.length];
+}
+
+export type LeaderboardPeriod = 'weekly' | 'monthly' | 'all_time';
+
+export interface LeaderboardEntry {
+  id: string;
+  rank: number;
+  playerName: string;
+  avatarId: AvatarId;
+  matchesPlayed: number;
+  wins: number;
+  winRate: number;
+  totalEarnings: number;
+  streak: number;
+  favoriteMode: LudoMode;
+  isCurrentUser?: boolean;
+}
+
+interface RawLeaderboardSeed {
+  id: string;
+  playerName: string;
+  avatarId: AvatarId;
+  matchesPlayed: number;
+  wins: number;
+  totalEarnings: number;
+  streak: number;
+  favoriteMode: LudoMode;
+}
+
+const LEADERBOARD_SEEDS: Record<LeaderboardPeriod, RawLeaderboardSeed[]> = {
+  weekly: [
+    { id: 'lb-w-1', playerName: 'Aarav Sharma', avatarId: 'emerald-ace', matchesPlayed: 38, wins: 31, totalEarnings: 24800, streak: 7, favoriteMode: 'Classic' },
+    { id: 'lb-w-2', playerName: 'Kavya Nair', avatarId: 'crimson-striker', matchesPlayed: 35, wins: 27, totalEarnings: 21450, streak: 5, favoriteMode: 'Classic' },
+    { id: 'lb-w-3', playerName: 'Rohan Verma', avatarId: 'amber-king', matchesPlayed: 32, wins: 24, totalEarnings: 18900, streak: 4, favoriteMode: 'Classic' },
+    { id: 'lb-w-4', playerName: 'Meera Kapoor', avatarId: 'sapphire-queen', matchesPlayed: 29, wins: 21, totalEarnings: 16200, streak: 3, favoriteMode: 'Classic' },
+    { id: 'lb-w-5', playerName: 'Vikram Singh', avatarId: 'royal-tiger', matchesPlayed: 28, wins: 19, totalEarnings: 14500, streak: 4, favoriteMode: 'Quick' },
+    { id: 'lb-w-6', playerName: 'Ananya Joshi', avatarId: 'crimson-striker', matchesPlayed: 26, wins: 18, totalEarnings: 12950, streak: 2, favoriteMode: 'Classic' },
+    { id: 'lb-w-7', playerName: 'Kabir Malhotra', avatarId: 'emerald-ace', matchesPlayed: 25, wins: 16, totalEarnings: 11200, streak: 3, favoriteMode: 'Classic' },
+    { id: 'lb-w-8', playerName: 'Priya Menon', avatarId: 'sapphire-queen', matchesPlayed: 22, wins: 15, totalEarnings: 9800, streak: 2, favoriteMode: 'Classic' },
+    { id: 'lb-w-9', playerName: 'Siddharth Rao', avatarId: 'amber-king', matchesPlayed: 21, wins: 13, totalEarnings: 8450, streak: 1, favoriteMode: 'Rush' },
+    { id: 'lb-w-10', playerName: 'Zoya Khan', avatarId: 'crimson-striker', matchesPlayed: 19, wins: 12, totalEarnings: 7600, streak: 2, favoriteMode: 'Classic' },
+    { id: 'lb-w-11', playerName: 'Arjun Patel', avatarId: 'royal-tiger', matchesPlayed: 18, wins: 11, totalEarnings: 6400, streak: 1, favoriteMode: 'Classic' },
+    { id: 'lb-w-12', playerName: 'Sneha Iyer', avatarId: 'sapphire-queen', matchesPlayed: 16, wins: 9, totalEarnings: 5150, streak: 1, favoriteMode: 'Classic' },
+  ],
+  monthly: [
+    { id: 'lb-m-1', playerName: 'Kavya Nair', avatarId: 'crimson-striker', matchesPlayed: 142, wins: 112, totalEarnings: 89400, streak: 9, favoriteMode: 'Classic' },
+    { id: 'lb-m-2', playerName: 'Aarav Sharma', avatarId: 'emerald-ace', matchesPlayed: 136, wins: 104, totalEarnings: 84250, streak: 6, favoriteMode: 'Classic' },
+    { id: 'lb-m-3', playerName: 'Vikram Singh', avatarId: 'royal-tiger', matchesPlayed: 129, wins: 96, totalEarnings: 76800, streak: 5, favoriteMode: 'Classic' },
+    { id: 'lb-m-4', playerName: 'Rohan Verma', avatarId: 'amber-king', matchesPlayed: 118, wins: 85, totalEarnings: 68500, streak: 4, favoriteMode: 'Classic' },
+    { id: 'lb-m-5', playerName: 'Priya Menon', avatarId: 'sapphire-queen', matchesPlayed: 112, wins: 79, totalEarnings: 61900, streak: 3, favoriteMode: 'Quick' },
+    { id: 'lb-m-6', playerName: 'Meera Kapoor', avatarId: 'sapphire-queen', matchesPlayed: 105, wins: 73, totalEarnings: 55400, streak: 4, favoriteMode: 'Classic' },
+    { id: 'lb-m-7', playerName: 'Kabir Malhotra', avatarId: 'emerald-ace', matchesPlayed: 98, wins: 67, totalEarnings: 49200, streak: 2, favoriteMode: 'Classic' },
+    { id: 'lb-m-8', playerName: 'Ananya Joshi', avatarId: 'crimson-striker', matchesPlayed: 91, wins: 61, totalEarnings: 43800, streak: 3, favoriteMode: 'Classic' },
+    { id: 'lb-m-9', playerName: 'Arjun Patel', avatarId: 'royal-tiger', matchesPlayed: 84, wins: 54, totalEarnings: 38600, streak: 2, favoriteMode: 'Rush' },
+    { id: 'lb-m-10', playerName: 'Siddharth Rao', avatarId: 'amber-king', matchesPlayed: 79, wins: 49, totalEarnings: 34100, streak: 1, favoriteMode: 'Classic' },
+    { id: 'lb-m-11', playerName: 'Zoya Khan', avatarId: 'crimson-striker', matchesPlayed: 72, wins: 44, totalEarnings: 29500, streak: 2, favoriteMode: 'Classic' },
+    { id: 'lb-m-12', playerName: 'Sneha Iyer', avatarId: 'sapphire-queen', matchesPlayed: 68, wins: 40, totalEarnings: 25400, streak: 1, favoriteMode: 'Classic' },
+  ],
+  all_time: [
+    { id: 'lb-a-1', playerName: 'Vikram Singh', avatarId: 'royal-tiger', matchesPlayed: 640, wins: 498, totalEarnings: 392500, streak: 11, favoriteMode: 'Classic' },
+    { id: 'lb-a-2', playerName: 'Aarav Sharma', avatarId: 'emerald-ace', matchesPlayed: 615, wins: 472, totalEarnings: 368400, streak: 8, favoriteMode: 'Classic' },
+    { id: 'lb-a-3', playerName: 'Kavya Nair', avatarId: 'crimson-striker', matchesPlayed: 590, wins: 446, totalEarnings: 341200, streak: 7, favoriteMode: 'Classic' },
+    { id: 'lb-a-4', playerName: 'Meera Kapoor', avatarId: 'sapphire-queen', matchesPlayed: 534, wins: 395, totalEarnings: 298700, streak: 5, favoriteMode: 'Classic' },
+    { id: 'lb-a-5', playerName: 'Rohan Verma', avatarId: 'amber-king', matchesPlayed: 512, wins: 374, totalEarnings: 279300, streak: 6, favoriteMode: 'Classic' },
+    { id: 'lb-a-6', playerName: 'Kabir Malhotra', avatarId: 'emerald-ace', matchesPlayed: 478, wins: 340, totalEarnings: 248900, streak: 4, favoriteMode: 'Quick' },
+    { id: 'lb-a-7', playerName: 'Priya Menon', avatarId: 'sapphire-queen', matchesPlayed: 452, wins: 318, totalEarnings: 229500, streak: 3, favoriteMode: 'Classic' },
+    { id: 'lb-a-8', playerName: 'Ananya Joshi', avatarId: 'crimson-striker', matchesPlayed: 421, wins: 292, totalEarnings: 204600, streak: 4, favoriteMode: 'Classic' },
+    { id: 'lb-a-9', playerName: 'Siddharth Rao', avatarId: 'amber-king', matchesPlayed: 395, wins: 268, totalEarnings: 186200, streak: 2, favoriteMode: 'Classic' },
+    { id: 'lb-a-10', playerName: 'Arjun Patel', avatarId: 'royal-tiger', matchesPlayed: 368, wins: 245, totalEarnings: 168400, streak: 3, favoriteMode: 'Rush' },
+    { id: 'lb-a-11', playerName: 'Zoya Khan', avatarId: 'crimson-striker', matchesPlayed: 340, wins: 221, totalEarnings: 149800, streak: 2, favoriteMode: 'Classic' },
+    { id: 'lb-a-12', playerName: 'Sneha Iyer', avatarId: 'sapphire-queen', matchesPlayed: 312, wins: 198, totalEarnings: 132500, streak: 2, favoriteMode: 'Classic' },
+  ],
+};
+
+export function getMockLeaderboardData(
+  period: LeaderboardPeriod,
+  currentPlayer?: {
+    name: string;
+    avatarId: AvatarId;
+    matchesPlayed?: number;
+    wins?: number;
+    totalEarnings?: number;
+  }
+): LeaderboardEntry[] {
+  const seeds = LEADERBOARD_SEEDS[period];
+  const baseList: RawLeaderboardSeed[] = seeds.map((item) => ({ ...item }));
+
+  if (currentPlayer?.name?.trim()) {
+    const cleanName = currentPlayer.name.trim();
+    const matchIdx = baseList.findIndex(
+      (item) => item.playerName.toLowerCase() === cleanName.toLowerCase()
+    );
+    if (matchIdx >= 0) {
+      baseList[matchIdx] = {
+        ...baseList[matchIdx],
+        avatarId: currentPlayer.avatarId,
+        matchesPlayed: baseList[matchIdx].matchesPlayed + (currentPlayer.matchesPlayed ?? 0),
+        wins: baseList[matchIdx].wins + (currentPlayer.wins ?? 0),
+        totalEarnings: baseList[matchIdx].totalEarnings + (currentPlayer.totalEarnings ?? 0),
+      };
+    } else {
+      const baseWins = currentPlayer.wins ?? 0;
+      const baseMatches = Math.max(baseWins, currentPlayer.matchesPlayed ?? 0);
+      const baseEarnings = currentPlayer.totalEarnings ?? 0;
+      baseList.push({
+        id: 'lb-current-user',
+        playerName: cleanName,
+        avatarId: currentPlayer.avatarId,
+        matchesPlayed: baseMatches + (period === 'weekly' ? 8 : period === 'monthly' ? 22 : 48),
+        wins: baseWins + (period === 'weekly' ? 5 : period === 'monthly' ? 14 : 31),
+        totalEarnings: baseEarnings + (period === 'weekly' ? 3850 : period === 'monthly' ? 12400 : 28900),
+        streak: 2,
+        favoriteMode: 'Classic',
+      });
+    }
+  }
+
+  const normalizedName = currentPlayer?.name?.trim().toLowerCase() ?? '';
+  return baseList
+    .slice()
+    .sort((a, b) => b.totalEarnings - a.totalEarnings || b.wins - a.wins)
+    .map((entry, index) => {
+      const winRate =
+        entry.matchesPlayed > 0
+          ? Math.round((entry.wins / entry.matchesPlayed) * 100)
+          : 0;
+      return {
+        ...entry,
+        rank: index + 1,
+        winRate,
+        isCurrentUser:
+          Boolean(normalizedName) && entry.playerName.toLowerCase() === normalizedName,
+      };
+    });
+}
+

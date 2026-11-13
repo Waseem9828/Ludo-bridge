@@ -4,13 +4,17 @@ import {
   mergeAnimatedBattles,
   validateBattleAmount,
   type AnimatedBattleEntry,
+  type AvatarId,
   type HubSnapshot,
 } from '../shared/matchmaking';
+import { PlayerAvatar } from './PlayerAvatar';
 
 interface MatchmakerHubProps {
   hub: HubSnapshot;
   loadingHub: boolean;
   hostedRooms: Record<string, string>;
+  playerName: string;
+  playerAvatarId: AvatarId;
   onCreateBattle: (amount: number) => Promise<void>;
   onJoinLobby: (code: string) => Promise<void>;
   onDeleteLobby: (code: string, playerId: string) => Promise<void>;
@@ -20,6 +24,8 @@ export function MatchmakerHub({
   hub,
   loadingHub,
   hostedRooms,
+  playerName,
+  playerAvatarId,
   onCreateBattle,
   onJoinLobby,
   onDeleteLobby,
@@ -138,14 +144,14 @@ export function MatchmakerHub({
   return (
     <div
       id="top"
-      className="flex-1 min-h-0 w-full flex flex-col gap-3 sm:gap-4 px-4 pt-3 pb-[calc(4.75rem+env(safe-area-inset-bottom))] sm:px-8 sm:pt-4 md:pb-4 overflow-hidden"
+      className="flex-1 w-full flex flex-col gap-3 sm:gap-4 px-4 pt-3 pb-4 sm:px-8 sm:pt-4"
       data-testid="lobby-page"
     >
-      {/* Compact Sticky Create Battle Card (Never Scrolls) */}
+      {/* Compact Sticky Create Battle Card */}
       <section
         id="battle-desk"
         aria-label="Create battle"
-        className="w-full shrink-0 rounded-2xl bg-gradient-to-b from-[#FCE6D2] via-[#F7BE8A] to-[#EE8E42] p-3 sm:p-4 shadow-peach-card"
+        className="sticky top-[74px] sm:top-[84px] z-20 w-full shrink-0 rounded-2xl bg-gradient-to-b from-[#FCE6D2] via-[#F7BE8A] to-[#EE8E42] p-3 sm:p-4 shadow-peach-card"
       >
         <div className="flex items-center justify-between gap-2">
           <h1 className="font-display text-base sm:text-lg font-bold tracking-tight text-[#16181D]">
@@ -208,15 +214,15 @@ export function MatchmakerHub({
         </div>
       )}
 
-      {/* Independently Scrollable Battles Container */}
+      {/* Full-Height Expanded Battles Container */}
       <section
         aria-label="Battles"
         data-testid="battles-scroll-container"
-        className="flex-1 min-h-0 w-full flex flex-col rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] p-4 sm:p-5 text-white shadow-emerald-card overflow-hidden"
+        className="flex-1 w-full flex flex-col rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] p-4 sm:p-5 text-white shadow-emerald-card"
       >
         <div
           data-testid="battles-scroll-area"
-          className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-5"
+          className="flex-1 space-y-5"
         >
           {/* Open Battles */}
           <div id="open-battles">
@@ -257,16 +263,25 @@ export function MatchmakerHub({
                         exiting ? 'animate-battle-out pointer-events-none' : 'animate-battle-in'
                       }`}
                     >
-                      <div className="min-w-0">
-                        <p className="text-sm font-bold text-white tabular-nums">
-                          Amount ₹{lobby.amount.toLocaleString('en-IN')}
-                        </p>
-                        <p className="mt-0.5 text-xs text-white/80 tabular-nums">
-                          {host.name}
-                          {' · '}
-                          <span className="font-mono text-[#FCD34D]">{lobby.code}</span>
-                          {ownPlayerId ? ' · Your Battle' : ''}
-                        </p>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <PlayerAvatar
+                          name={host.name}
+                          avatarId={
+                            ownPlayerId || host.name === playerName ? playerAvatarId : undefined
+                          }
+                          size="sm"
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-white tabular-nums">
+                            Amount ₹{lobby.amount.toLocaleString('en-IN')}
+                          </p>
+                          <p className="mt-0.5 text-xs text-white/80 tabular-nums truncate">
+                            {host.name}
+                            {' · '}
+                            <span className="font-mono text-[#FCD34D]">{lobby.code}</span>
+                            {ownPlayerId ? ' · Your Battle' : ''}
+                          </p>
+                        </div>
                       </div>
 
                       {ownPlayerId ? (
@@ -362,16 +377,30 @@ export function MatchmakerHub({
                         </span>
                       </div>
 
-                      <div className="mt-2.5 grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-                        <span className="truncate text-left text-xs sm:text-sm font-bold text-white">
-                          {p1.name}
-                        </span>
-                        <span className="inline-flex items-center justify-center rounded-full bg-[#FCD34D] px-2.5 py-0.5 text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-[#16181D] shadow-xs">
+                      <div className="mt-2.5 grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-3 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <PlayerAvatar
+                            name={p1.name}
+                            avatarId={p1.name === playerName ? playerAvatarId : undefined}
+                            size="xs"
+                          />
+                          <span className="truncate text-left text-xs sm:text-sm font-bold text-white">
+                            {p1.name}
+                          </span>
+                        </div>
+                        <span className="inline-flex items-center justify-center rounded-full bg-[#FCD34D] px-2.5 py-0.5 text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-[#16181D] shadow-xs shrink-0">
                           vs
                         </span>
-                        <span className="truncate text-right text-xs sm:text-sm font-bold text-white">
-                          {p2.name}
-                        </span>
+                        <div className="flex items-center justify-end gap-2 min-w-0">
+                          <span className="truncate text-right text-xs sm:text-sm font-bold text-white">
+                            {p2.name}
+                          </span>
+                          <PlayerAvatar
+                            name={p2.name}
+                            avatarId={p2.name === playerName ? playerAvatarId : undefined}
+                            size="xs"
+                          />
+                        </div>
                       </div>
                     </div>
                   );

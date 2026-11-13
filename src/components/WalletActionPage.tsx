@@ -4,6 +4,7 @@ import {
   validateWalletTransaction,
   type WalletTransaction,
 } from '../shared/matchmaking';
+import { PageTitleHeading } from './PageTitleHeading';
 
 interface WalletActionPageProps {
   mode: 'deposit' | 'withdraw';
@@ -71,25 +72,16 @@ export function WalletActionPage({
       className="w-full px-4 py-5 sm:px-8 sm:py-8 space-y-6"
       data-testid={isDeposit ? 'wallet-deposit-page' : 'wallet-withdraw-page'}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="space-y-1">
-          <button
-            type="button"
-            onClick={onBackToWallet}
-            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-full px-2 -ml-2 text-xs font-semibold text-[#0D7A5F] hover:underline"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>Back to Wallet</span>
-          </button>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-[#16181D]">
-            {isDeposit ? 'Deposit Funds' : 'Withdraw Funds'}
-          </h1>
-          <p className="text-xs sm:text-sm text-[#5A606D]">
-            {isDeposit
-              ? 'Add chips to your LudoBridge wallet balance.'
-              : 'Transfer available balance directly to your UPI ID.'}
-          </p>
-        </div>
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={onBackToWallet}
+          className="inline-flex min-h-[38px] items-center gap-1.5 rounded-full px-2 -ml-2 text-xs font-semibold text-[#0D7A5F] hover:underline"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+          <span>Back to Wallet</span>
+        </button>
+        <PageTitleHeading title={isDeposit ? 'Deposit Funds' : 'Withdraw Funds'} />
       </div>
 
       <div className="grid gap-5 md:grid-cols-12 items-stretch">

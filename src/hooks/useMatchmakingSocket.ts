@@ -98,7 +98,23 @@ export function useMatchmakingSocket({
       };
     };
 
-    connect();
+    const initSocket = async () => {
+      if (isStaticFallbackActive()) return;
+      try {
+        const probe = await fetch('/api/lobbies');
+        const contentType = probe.headers.get('content-type') ?? '';
+        if (!contentType.includes('application/json')) {
+          return;
+        }
+      } catch {
+        return;
+      }
+      if (active) {
+        connect();
+      }
+    };
+
+    void initSocket();
 
     return () => {
       active = false;

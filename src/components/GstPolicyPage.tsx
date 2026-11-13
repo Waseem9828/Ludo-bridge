@@ -1,15 +1,9 @@
+import { PageTitleHeading } from './PageTitleHeading';
+
 export function GstPolicyPage() {
   return (
     <div className="w-full px-4 py-5 sm:px-8 sm:py-8 space-y-6" data-testid="gst-policy-page">
-      <div className="space-y-1">
-        <p className="text-xs font-semibold text-[#0D7A5F]">Tax &amp; Billing Compliance</p>
-        <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-[#16181D]">
-          GST Policy
-        </h1>
-        <p className="text-xs sm:text-sm text-[#5A606D]">
-          Overview of Goods and Services Tax (GST) applicability and ledger transparency.
-        </p>
-      </div>
+      <PageTitleHeading title="GST Policy" />
 
       <section className="rounded-2xl bg-white p-5 sm:p-7 shadow-surface-card space-y-5 text-sm leading-relaxed text-[#454A54]">
         <div>

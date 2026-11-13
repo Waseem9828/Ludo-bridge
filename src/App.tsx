@@ -17,6 +17,7 @@ import { GuideModal } from './components/GuideModal';
 import { Header } from './components/Header';
 import { HistoryPage } from './components/HistoryPage';
 import { HomePage } from './components/HomePage';
+import { LeaderboardPage } from './components/LeaderboardPage';
 import { MatchmakerHub } from './components/MatchmakerHub';
 import { MatchRoom } from './components/MatchRoom';
 import { MobileNav } from './components/MobileNav';
@@ -29,13 +30,17 @@ import { WalletActionPage } from './components/WalletActionPage';
 import { WalletPage } from './components/WalletPage';
 import { useMatchmakingSocket } from './hooks/useMatchmakingSocket';
 import {
+  AVATAR_IDS,
+  isValidAvatarId,
   normalizeLobbyCode,
+  type AvatarId,
   type HubSnapshot,
   type MatchRoom as MatchRoomType,
   type WalletTransaction,
 } from './shared/matchmaking';
 
 const PLAYER_NAME_KEY = 'ludobridge.playerName';
+const PLAYER_AVATAR_KEY = 'ludobridge.avatarId';
 const ACTIVE_SESSION_KEY = 'ludobridge.activeSession';
 const HOSTED_ROOMS_KEY = 'ludobridge.hostedRooms';
 const WALLET_KEY = 'ludobridge.wallet';
@@ -59,6 +64,7 @@ const ROUTE_TO_PATH: Record<Exclude<AppViewRoute, 'room'>, string> = {
   'wallet-withdraw': '/wallet/withdraw',
   profile: '/profile',
   history: '/history',
+  leaderboard: '/leaderboard',
   referral: '/referral',
   terms: '/terms',
   'gst-policy': '/gst-policy',
@@ -101,6 +107,7 @@ function parseRouteFromLocation(): ParsedRoute {
   if (pathname === '/wallet') return { view: 'wallet', roomCode: '', joinCode: '' };
   if (pathname === '/profile') return { view: 'profile', roomCode: '', joinCode: '' };
   if (pathname === '/history') return { view: 'history', roomCode: '', joinCode: '' };
+  if (pathname === '/leaderboard') return { view: 'leaderboard', roomCode: '', joinCode: '' };
   if (pathname === '/referral') return { view: 'referral', roomCode: '', joinCode: '' };
   if (pathname === '/terms') return { view: 'terms', roomCode: '', joinCode: '' };
   if (pathname === '/gst-policy') return { view: 'gst-policy', roomCode: '', joinCode: '' };
@@ -120,6 +127,19 @@ function getOrCreatePlayerName(): string {
     return generated;
   } catch {
     return 'Player 101';
+  }
+}
+
+function getOrCreateAvatarId(): AvatarId {
+  try {
+    const existing = window.localStorage.getItem(PLAYER_AVATAR_KEY);
+    if (isValidAvatarId(existing)) {
+      return existing;
+    }
+    window.localStorage.setItem(PLAYER_AVATAR_KEY, AVATAR_IDS[0]);
+    return AVATAR_IDS[0];
+  } catch {
+    return AVATAR_IDS[0];
   }
 }
 
@@ -245,6 +265,7 @@ export default function App() {
   const [initialRoute] = useState<ParsedRoute>(() => parseRouteFromLocation());
   const [view, setView] = useState<AppViewRoute>(() => initialRoute.view);
   const [playerName, setPlayerName] = useState<string>(() => getOrCreatePlayerName());
+  const [avatarId, setAvatarId] = useState<AvatarId>(() => getOrCreateAvatarId());
   const [wallet, setWallet] = useState<StoredWallet>(() => readWalletState());
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hostedRooms, setHostedRooms] = useState<Record<string, string>>(() =>
@@ -269,6 +290,15 @@ export default function App() {
     setPlayerName(name);
     try {
       window.localStorage.setItem(PLAYER_NAME_KEY, name);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  const handleSaveAvatar = useCallback((nextAvatar: AvatarId) => {
+    setAvatarId(nextAvatar);
+    try {
+      window.localStorage.setItem(PLAYER_AVATAR_KEY, nextAvatar);
     } catch {
       // ignore storage errors
     }
@@ -597,14 +627,8 @@ export default function App() {
     }
   };
 
-  const isLobbyLockedView = view === 'lobby' && !restoringRoom;
-
   return (
-    <div
-      className={`w-full overflow-x-clip bg-[#F8F7F4] flex flex-col ${
-        isLobbyLockedView ? 'h-dvh overflow-hidden' : 'min-h-screen'
-      }`}
-    >
+    <div className="min-h-screen w-full overflow-x-clip bg-[#F8F7F4] flex flex-col">
       <Header
         currentView={view}
         sidebarOpen={sidebarOpen}
@@ -616,11 +640,7 @@ export default function App() {
         onOpenGuide={() => setGuideOpen(true)}
       />
 
-      <main
-        className={`flex-1 w-full pt-16 sm:pt-[72px] ${
-          isLobbyLockedView ? 'min-h-0 flex flex-col overflow-hidden' : ''
-        }`}
-      >
+      <main className="flex-1 w-full flex flex-col pt-16 sm:pt-[72px]">
         {bannerError && (
           <div className="px-6 pt-5 sm:px-8">
             <div
@@ -647,6 +667,7 @@ export default function App() {
           <MatchRoom
             room={activeRoom}
             currentPlayerId={activePlayerId}
+            currentPlayerAvatarId={avatarId}
             wsConnected={wsConnected}
             onSubmitLudoCode={async (lkCode) => {
               const { room } = await submitLudoKingCode(
@@ -694,6 +715,8 @@ export default function App() {
             hub={hub}
             loadingHub={loadingHub}
             hostedRooms={hostedRooms}
+            playerName={playerName}
+            playerAvatarId={avatarId}
             onCreateBattle={handleCreateBattle}
             onJoinLobby={handleJoinLobby}
             onDeleteLobby={handleDeleteLobby}
@@ -722,9 +745,12 @@ export default function App() {
         ) : view === 'profile' ? (
           <ProfilePage
             playerName={playerName}
+            avatarId={avatarId}
             hub={hub}
             onSavePlayerName={handleSavePlayerName}
+            onSaveAvatar={handleSaveAvatar}
             onEnterLobby={navigateLobby}
+            onOpenLeaderboard={() => navigateToRoute('leaderboard')}
           />
         ) : view === 'history' ? (
           <HistoryPage
@@ -733,6 +759,14 @@ export default function App() {
             walletTransactions={wallet.transactions}
             playerName={playerName}
             onEnterLobby={navigateLobby}
+          />
+        ) : view === 'leaderboard' ? (
+          <LeaderboardPage
+            playerName={playerName}
+            avatarId={avatarId}
+            hub={hub}
+            onEnterLobby={navigateLobby}
+            onOpenProfile={() => navigateToRoute('profile')}
           />
         ) : view === 'referral' ? (
           <ReferralPage playerName={playerName} />
@@ -743,20 +777,21 @@ export default function App() {
         ) : view === 'refund-policy' ? (
           <RefundPolicyPage />
         ) : (
-          <HomePage onEnterClassicLobby={navigateLobby} />
+          <HomePage
+            onEnterClassicLobby={navigateLobby}
+            onOpenLeaderboard={() => navigateToRoute('leaderboard')}
+          />
         )}
       </main>
 
-      {!isLobbyLockedView && (
-        <footer className="border-t border-[#16181D]/8 px-4 pt-4 pb-[calc(5.25rem+env(safe-area-inset-bottom))] sm:px-8 md:pb-4 flex items-center justify-center sm:justify-between gap-4 text-[11px] sm:text-xs text-[#5A606D]">
-          <span className="whitespace-nowrap truncate">
-            © 2026 LudoBridge · All Rights Reserved
-          </span>
-          <span className="hidden sm:inline whitespace-nowrap">
-            2-Player Ludo King Matchmaking
-          </span>
-        </footer>
-      )}
+      <footer className="border-t border-[#16181D]/8 px-4 pt-4 pb-[calc(5.25rem+env(safe-area-inset-bottom))] sm:px-8 md:pb-4 flex items-center justify-center sm:justify-between gap-4 text-[11px] sm:text-xs text-[#5A606D]">
+        <span className="whitespace-nowrap truncate">
+          © 2026 LudoBridge · All Rights Reserved
+        </span>
+        <span className="hidden sm:inline whitespace-nowrap">
+          2-Player Ludo King Matchmaking
+        </span>
+      </footer>
 
       <MobileNav currentView={view} onNavigate={navigateToRoute} />
 
@@ -764,6 +799,7 @@ export default function App() {
         open={sidebarOpen}
         currentView={view}
         playerName={playerName}
+        avatarId={avatarId}
         onClose={() => setSidebarOpen(false)}
         onNavigate={navigateToRoute}
       />

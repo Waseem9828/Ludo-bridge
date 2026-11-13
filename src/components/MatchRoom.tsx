@@ -16,12 +16,15 @@ import {
   formatLudoKingCode,
   validateCancelReason,
   validateLudoKingCode,
+  type AvatarId,
   type MatchRoom,
 } from '../shared/matchmaking';
+import { PlayerAvatar } from './PlayerAvatar';
 
 interface MatchRoomProps {
   room: MatchRoom;
   currentPlayerId: string;
+  currentPlayerAvatarId?: AvatarId;
   wsConnected: boolean;
   onSubmitLudoCode: (ludoKingCode: string) => Promise<void>;
   onToggleReady: (ready: boolean) => Promise<void>;
@@ -42,6 +45,7 @@ const QUICK_PHRASES = [
 export function MatchRoom({
   room,
   currentPlayerId,
+  currentPlayerAvatarId,
   wsConnected,
   onSubmitLudoCode,
   onToggleReady,
@@ -195,16 +199,34 @@ export function MatchRoom({
                 </span>
               </div>
 
-              <div className="mt-2.5 grid grid-cols-[1fr_auto_1fr] items-center gap-3 min-w-0">
-                <span className="truncate text-left text-xs sm:text-sm font-bold text-white">
-                  {player1 ? player1.name : 'Host'}
-                </span>
+              <div className="mt-2.5 grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-3 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <PlayerAvatar
+                    name={player1 ? player1.name : 'Host'}
+                    avatarId={
+                      player1?.id === currentPlayerId ? currentPlayerAvatarId : undefined
+                    }
+                    size="xs"
+                  />
+                  <span className="truncate text-left text-xs sm:text-sm font-bold text-white">
+                    {player1 ? player1.name : 'Host'}
+                  </span>
+                </div>
                 <span className="inline-flex items-center justify-center rounded-full bg-[#FCD34D] px-2.5 py-0.5 text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-[#16181D] shadow-xs shrink-0">
                   vs
                 </span>
-                <span className="truncate text-right text-xs sm:text-sm font-bold text-white">
-                  {player2 ? player2.name : 'Waiting...'}
-                </span>
+                <div className="flex items-center justify-end gap-2 min-w-0">
+                  <span className="truncate text-right text-xs sm:text-sm font-bold text-white">
+                    {player2 ? player2.name : 'Waiting...'}
+                  </span>
+                  <PlayerAvatar
+                    name={player2 ? player2.name : 'W'}
+                    avatarId={
+                      player2?.id === currentPlayerId ? currentPlayerAvatarId : undefined
+                    }
+                    size="xs"
+                  />
+                </div>
               </div>
             </div>
 

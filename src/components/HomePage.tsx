@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import { ArrowRight, Lock, Megaphone } from 'lucide-react';
+import { ArrowRight, Lock, Megaphone, Trophy } from 'lucide-react';
 import classicHeroImg from '../assets/images/ludo_tabletop_hero_1794536790290.jpg';
 import popularPawnImg from '../assets/images/ludo_pawn_crimson_1794536789653.jpg';
 
 interface HomePageProps {
   onEnterClassicLobby: () => void;
+  onOpenLeaderboard: () => void;
 }
 
-export function HomePage({ onEnterClassicLobby }: HomePageProps) {
+export function HomePage({ onEnterClassicLobby, onOpenLeaderboard }: HomePageProps) {
   const [classicImgFailed, setClassicImgFailed] = useState(false);
   const [popularImgFailed, setPopularImgFailed] = useState(false);
 
@@ -103,6 +104,30 @@ export function HomePage({ onEnterClassicLobby }: HomePageProps) {
           </button>
         </section>
       </div>
+
+      {/* Quick Leaderboard Link Card */}
+      <button
+        type="button"
+        onClick={onOpenLeaderboard}
+        data-testid="home-leaderboard-cta"
+        className="w-full flex items-center justify-between gap-3 rounded-2xl border border-[#0D7A5F]/15 bg-white px-4 py-3.5 text-left shadow-surface-card transition-colors hover:bg-[#FAF9F5]"
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#0D7A5F]/10 text-[#064E3B] shrink-0">
+            <Trophy className="h-5 w-5" aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-[#16181D]">Champions Leaderboard</p>
+            <p className="truncate text-xs text-[#5A606D]">
+              View weekly &amp; monthly top Ludo earners
+            </p>
+          </div>
+        </div>
+        <span className="inline-flex items-center gap-1 rounded-full bg-[#0D7A5F] px-3.5 py-1.5 text-xs font-bold text-white whitespace-nowrap shrink-0">
+          <span>View Ranks</span>
+          <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+        </span>
+      </button>
     </div>
   );
 }
