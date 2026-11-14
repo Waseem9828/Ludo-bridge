@@ -1,0 +1,368 @@
+import {
+  applyAdminDepositAction,
+  applyAdminWithdrawalAction,
+  calculateAdminEarnings,
+  calculateMatchCommission,
+  ensureAdminStore,
+  imposeAdminPenalty,
+  updateAdminPlayer,
+  waiveAdminPenalty,
+  type AdminDashboardSnapshot,
+  type AdminLevelConfig,
+  type AdminStoreState,
+  type AdminSystemSettings,
+} from '../shared/admin';
+import {
+  applyRematchReset,
+  computeMatchStatus,
+  createInitialResultReport,
+  validateLudoKingCode,
+} from '../shared/matchmaking';
+import { createInitialMockStore, type StoreState } from '../shared/mockStore';
+
+const ADMIN_FALLBACK_KEY = 'ludobridge.staticStore.v1';
+
+function readFallbackStore(): StoreState {
+  try {
+    const raw = window.localStorage.getItem(ADMIN_FALLBACK_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as StoreState;
+      if (parsed && parsed.rooms && Array.isArray(parsed.recentMatches)) {
+        return {
+          ...parsed,
+          adminState: ensureAdminStore(parsed.adminState),
+        };
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+  const fresh = createInitialMockStore();
+  writeFallbackStore(fresh);
+  return fresh;
+}
+
+function writeFallbackStore(store: StoreState): void {
+  try {
+    window.localStorage.setItem(ADMIN_FALLBACK_KEY, JSON.stringify(store));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function buildFallbackSnapshot(store: StoreState): AdminDashboardSnapshot {
+  const admin: AdminStoreState = ensureAdminStore(store.adminState);
+  const rooms = Object.values(store.rooms).sort((a, b) =>
+    b.updatedAt.localeCompare(a.updatedAt)
+  );
+  const recentMatches = store.recentMatches.slice(0, 50);
+  return {
+    rooms,
+    recentMatches,
+    admin,
+    earnings: calculateAdminEarnings(rooms, recentMatches, admin),
+  };
+}
+
+async function adminRequest<T>(
+  url: string,
+  options: RequestInit | undefined,
+  localHandler: () => T
+): Promise<T> {
+  try {
+    const res = await fetch(url, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    });
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return localHandler();
+    }
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error((payload as { error?: string }).error || 'Admin request failed.');
+    }
+    return payload as T;
+  } catch (err) {
+    if (err instanceof TypeError) {
+      return localHandler();
+    }
+    throw err;
+  }
+}
+
+export function fetchAdminState(): Promise<AdminDashboardSnapshot> {
+  return adminRequest<AdminDashboardSnapshot>('/api/admin/state', undefined, () => {
+    const store = readFallbackStore();
+    return buildFallbackSnapshot(store);
+  });
+}
+
+export function controlAdminMatch(
+  code: string,
+  payload: {
+    action: 'declare_winner' | 'cancel_refund' | 'reset_round' | 'set_lk_code';
+    winnerId?: string;
+    ludoKingRoomCode?: string;
+  }
+): Promise<AdminDashboardSnapshot> {
+  return adminRequest<AdminDashboardSnapshot>(
+    `/api/admin/matches/${encodeURIComponent(code)}/control`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    () => {
+      const store = readFallbackStore();
+      const admin = ensureAdminStore(store.adminState);
+      const room = store.rooms[code];
+      if (!room) throw new Error('Match room not found.');
+      const now = new Date().toISOString();
+
+      if (payload.action === 'cancel_refund') {
+        delete store.rooms[code];
+      } else if (payload.action === 'reset_round') {
+        store.rooms[code] = applyRematchReset(room, now);
+      } else if (payload.action === 'set_lk_code') {
+        const check = validateLudoKingCode(payload.ludoKingRoomCode ?? '');
+        if (!check.valid) throw new Error(check.error);
+        room.ludoKingRoomCode = check.value;
+        room.updatedAt = now;
+        room.status = computeMatchStatus(room);
+      } else if (payload.action === 'declare_winner') {
+        const winner = room.players.find((p) => p.id === payload.winnerId);
+        if (!winner) throw new Error('Selected winner not found.');
+        room.winnerId = winner.id;
+        room.winnerName = winner.name;
+        room.status = 'completed';
+        room.updatedAt = now;
+        room.resultReport = {
+          ...(room.resultReport ?? createInitialResultReport(room, winner.id, winner.id, now)),
+          winnerConfirmed: true,
+          loserConfirmed: true,
+          disputedByPlayerId: null,
+          disputeReason: null,
+        };
+        store.recentMatches.unshift({
+          id: `rec-${Date.now().toString(36)}`,
+          lobbyCode: room.code,
+          mode: room.mode,
+          amount: room.amount,
+          stakesLabel: room.stakesLabel,
+          bestOf: room.bestOf,
+          player1Name: room.players[0].name,
+          player1Color: room.players[0].color,
+          player2Name: room.players[1].name,
+          player2Color: room.players[1].color,
+          winnerName: winner.name,
+          ludoKingRoomCode: room.ludoKingRoomCode,
+          roundNumber: room.roundNumber,
+          completedAt: now,
+        });
+        const { winnerPayout } = calculateMatchCommission(
+          room.amount,
+          admin.settings.commissionPct
+        );
+        admin.players = admin.players.map((p) =>
+          p.name.toLowerCase() === winner.name.toLowerCase()
+            ? { ...p, walletBalance: p.walletBalance + winnerPayout, wins: p.wins + 1, matchesPlayed: p.matchesPlayed + 1 }
+            : p
+        );
+      }
+
+      store.adminState = admin;
+      writeFallbackStore(store);
+      return buildFallbackSnapshot(store);
+    }
+  );
+}
+
+export function createAdminDeposit(payload: {
+  playerId: string;
+  amount: number;
+  method?: string;
+  reference?: string;
+  autoApprove?: boolean;
+}): Promise<AdminDashboardSnapshot> {
+  return adminRequest<AdminDashboardSnapshot>(
+    '/api/admin/deposits',
+    { method: 'POST', body: JSON.stringify(payload) },
+    () => {
+      const store = readFallbackStore();
+      const admin = ensureAdminStore(store.adminState);
+      const player = admin.players.find((p) => p.id === payload.playerId);
+      if (!player) throw new Error('Select a valid player.');
+      const now = new Date().toISOString();
+      admin.deposits.unshift({
+        id: `DEP-${Math.floor(1100 + Math.random() * 8800)}`,
+        playerId: player.id,
+        playerName: player.name,
+        amount: Math.round(payload.amount),
+        method: payload.method || 'Admin Credit',
+        reference: payload.reference || `ADM${Date.now().toString().slice(-6)}`,
+        status: payload.autoApprove ? 'approved' : 'pending',
+        createdAt: now,
+        processedAt: payload.autoApprove ? now : undefined,
+      });
+      if (payload.autoApprove) {
+        player.walletBalance += Math.round(payload.amount);
+      }
+      store.adminState = admin;
+      writeFallbackStore(store);
+      return buildFallbackSnapshot(store);
+    }
+  );
+}
+
+export function decideAdminDeposit(
+  depositId: string,
+  decision: 'approve' | 'reject',
+  note?: string
+): Promise<AdminDashboardSnapshot> {
+  return adminRequest<AdminDashboardSnapshot>(
+    `/api/admin/deposits/${encodeURIComponent(depositId)}/action`,
+    { method: 'POST', body: JSON.stringify({ decision, note }) },
+    () => {
+      const store = readFallbackStore();
+      const res = applyAdminDepositAction(
+        ensureAdminStore(store.adminState),
+        depositId,
+        decision,
+        new Date().toISOString(),
+        note
+      );
+      if (res.error) throw new Error(res.error);
+      store.adminState = res.admin;
+      writeFallbackStore(store);
+      return buildFallbackSnapshot(store);
+    }
+  );
+}
+
+export function decideAdminWithdrawal(
+  withdrawalId: string,
+  decision: 'approve' | 'reject',
+  utrOrNote?: string
+): Promise<AdminDashboardSnapshot> {
+  return adminRequest<AdminDashboardSnapshot>(
+    `/api/admin/withdrawals/${encodeURIComponent(withdrawalId)}/action`,
+    { method: 'POST', body: JSON.stringify({ decision, utrOrNote }) },
+    () => {
+      const store = readFallbackStore();
+      const res = applyAdminWithdrawalAction(
+        ensureAdminStore(store.adminState),
+        withdrawalId,
+        decision,
+        new Date().toISOString(),
+        utrOrNote
+      );
+      if (res.error) throw new Error(res.error);
+      store.adminState = res.admin;
+      writeFallbackStore(store);
+      return buildFallbackSnapshot(store);
+    }
+  );
+}
+
+export function createAdminPenalty(payload: {
+  playerId: string;
+  amount: number;
+  reason: string;
+  matchCode?: string;
+  suspendPlayer?: boolean;
+}): Promise<AdminDashboardSnapshot> {
+  return adminRequest<AdminDashboardSnapshot>(
+    '/api/admin/penalties',
+    { method: 'POST', body: JSON.stringify(payload) },
+    () => {
+      const store = readFallbackStore();
+      const res = imposeAdminPenalty(
+        ensureAdminStore(store.adminState),
+        payload,
+        new Date().toISOString()
+      );
+      if (res.error) throw new Error(res.error);
+      store.adminState = res.admin;
+      writeFallbackStore(store);
+      return buildFallbackSnapshot(store);
+    }
+  );
+}
+
+export function waivePenaltyAction(penaltyId: string): Promise<AdminDashboardSnapshot> {
+  return adminRequest<AdminDashboardSnapshot>(
+    `/api/admin/penalties/${encodeURIComponent(penaltyId)}/waive`,
+    { method: 'POST', body: '{}' },
+    () => {
+      const store = readFallbackStore();
+      const res = waiveAdminPenalty(
+        ensureAdminStore(store.adminState),
+        penaltyId,
+        new Date().toISOString()
+      );
+      if (res.error) throw new Error(res.error);
+      store.adminState = res.admin;
+      writeFallbackStore(store);
+      return buildFallbackSnapshot(store);
+    }
+  );
+}
+
+export function updatePlayerAdminAction(
+  playerId: string,
+  patch: {
+    xpDelta?: number;
+    walletDelta?: number;
+    setLevel?: number;
+    status?: 'active' | 'suspended';
+  }
+): Promise<AdminDashboardSnapshot> {
+  return adminRequest<AdminDashboardSnapshot>(
+    `/api/admin/players/${encodeURIComponent(playerId)}/update`,
+    { method: 'POST', body: JSON.stringify(patch) },
+    () => {
+      const store = readFallbackStore();
+      const res = updateAdminPlayer(
+        ensureAdminStore(store.adminState),
+        playerId,
+        patch,
+        new Date().toISOString()
+      );
+      if (res.error) throw new Error(res.error);
+      store.adminState = res.admin;
+      writeFallbackStore(store);
+      return buildFallbackSnapshot(store);
+    }
+  );
+}
+
+export function saveAdminLevels(
+  levels: AdminLevelConfig[]
+): Promise<AdminDashboardSnapshot> {
+  return adminRequest<AdminDashboardSnapshot>(
+    '/api/admin/levels',
+    { method: 'POST', body: JSON.stringify({ levels }) },
+    () => {
+      const store = readFallbackStore();
+      const admin = ensureAdminStore(store.adminState);
+      admin.levels = levels;
+      store.adminState = admin;
+      writeFallbackStore(store);
+      return buildFallbackSnapshot(store);
+    }
+  );
+}
+
+export function saveAdminSettings(
+  settings: AdminSystemSettings
+): Promise<AdminDashboardSnapshot> {
+  return adminRequest<AdminDashboardSnapshot>(
+    '/api/admin/settings',
+    { method: 'POST', body: JSON.stringify(settings) },
+    () => {
+      const store = readFallbackStore();
+      const admin = ensureAdminStore(store.adminState);
+      admin.settings = settings;
+      store.adminState = admin;
+      writeFallbackStore(store);
+      return buildFallbackSnapshot(store);
+    }
+  );
+}

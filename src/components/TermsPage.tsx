@@ -11,7 +11,7 @@ export function TermsPage() {
             1. Matchmaking &amp; Room Handoff Scope
           </h2>
           <p className="mt-1.5">
-            LudoBridge operates strictly as a 2-player matchmaking and private room code coordination platform. All actual board gameplay, dice rolls, and token movements take place inside the official Ludo King mobile application.
+            Ludo league.online operates strictly as a 2-player matchmaking and private room code coordination platform. All actual board gameplay, dice rolls, and token movements take place inside the official Ludo King mobile application.
           </p>
         </div>
 

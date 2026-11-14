@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ArrowRight, Lock, Megaphone, Trophy } from 'lucide-react';
-import classicHeroImg from '../assets/images/ludo_tabletop_hero_1794536790290.jpg';
-import popularPawnImg from '../assets/images/ludo_pawn_crimson_1794536789653.jpg';
+import classicHeroImg from '../assets/images/ludo_classic_card_1794626089521.jpg';
+import popularPawnImg from '../assets/images/ludo_popular_card_1794626089987.jpg';
 
 interface HomePageProps {
   onEnterClassicLobby: () => void;
@@ -83,7 +83,7 @@ export function HomePage({ onEnterClassicLobby, onOpenLeaderboard }: HomePagePro
                   alt="Ludo Popular pawn preview"
                   referrerPolicy="no-referrer"
                   onError={() => setPopularImgFailed(true)}
-                  className="h-full w-full object-cover opacity-85"
+                  className="h-full w-full object-cover object-[center_35%]"
                 />
               )}
             </div>

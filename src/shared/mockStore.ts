@@ -4,10 +4,15 @@ import type {
   MatchRoom,
   TokenColor,
 } from './matchmaking';
+import {
+  createInitialAdminStore,
+  type AdminStoreState,
+} from './admin';
 
 export interface StoreState {
   rooms: Record<string, MatchRoom>;
   recentMatches: CompletedMatchRecord[];
+  adminState?: AdminStoreState;
 }
 
 export function createInitialMockStore(now = Date.now()): StoreState {
@@ -362,6 +367,7 @@ export function createInitialMockStore(now = Date.now()): StoreState {
   return {
     rooms,
     recentMatches,
+    adminState: createInitialAdminStore(now),
   };
 }
 

@@ -173,6 +173,7 @@ export function MatchmakerHub({
             <button
               type="submit"
               disabled={submitting}
+              data-sound="none"
               className="min-h-[40px] inline-flex items-center justify-center gap-1.5 rounded-full bg-[#16181D] px-4 sm:px-5 py-2 text-xs font-bold text-white shadow-pill-btn transition-colors hover:bg-[#2A2D35] disabled:opacity-60 whitespace-nowrap shrink-0"
             >
               <span>{submitting ? 'Creating...' : 'Set Battle'}</span>
@@ -299,6 +300,7 @@ export function MatchmakerHub({
                         <button
                           type="button"
                           disabled={isBusy}
+                          data-sound="none"
                           onClick={() => handleAcceptBattle(lobby.code)}
                           aria-label={`Play battle for ₹${lobby.amount}`}
                           className="min-h-[38px] rounded-full bg-white px-5 py-1.5 text-xs font-bold text-[#064E3B] shadow-pill-btn transition-colors hover:bg-[#FAF9F5] disabled:opacity-60 whitespace-nowrap shrink-0"

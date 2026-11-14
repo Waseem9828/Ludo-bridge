@@ -1,7 +1,12 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
+
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  registerSW({ immediate: true });
+}
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -16,7 +21,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error('LudoBridge render error:', error, info);
+    console.error('Ludo league.online render error:', error, info);
   }
 
   render() {
@@ -25,7 +30,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
         <div className="min-h-screen w-full bg-[#F8F7F4] px-4 py-12 flex items-center justify-center">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-surface-card text-center space-y-4">
             <h1 className="font-display text-xl font-bold text-[#16181D]">
-              Unable to load LudoBridge
+              Unable to load Ludo league.online
             </h1>
             <p className="text-xs text-[#5A606D] break-words">{this.state.message}</p>
             <button

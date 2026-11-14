@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { AdminPanelPage } from './components/AdminPanelPage';
 import {
   confirmMatchResult,
   createLobby,
@@ -21,6 +22,7 @@ import { LeaderboardPage } from './components/LeaderboardPage';
 import { MatchmakerHub } from './components/MatchmakerHub';
 import { MatchRoom } from './components/MatchRoom';
 import { MobileNav } from './components/MobileNav';
+import { OfflineIndicator } from './components/OfflineIndicator';
 import { ProfilePage } from './components/ProfilePage';
 import { ReferralPage } from './components/ReferralPage';
 import { RefundPolicyPage } from './components/RefundPolicyPage';
@@ -40,6 +42,12 @@ import {
   type MatchRoom as MatchRoomType,
   type WalletTransaction,
 } from './shared/matchmaking';
+import {
+  getInteractiveClickTarget,
+  playSound,
+  readSoundEnabled,
+  setSoundEnabled,
+} from './utils/soundEffects';
 
 const PLAYER_NAME_KEY = 'ludobridge.playerName';
 const PLAYER_AVATAR_KEY = 'ludobridge.avatarId';
@@ -72,6 +80,7 @@ const ROUTE_TO_PATH: Record<Exclude<AppViewRoute, 'room'>, string> = {
   terms: '/terms',
   'gst-policy': '/gst-policy',
   'refund-policy': '/refund-policy',
+  admin: '/admin',
 };
 
 function parseRouteFromLocation(): ParsedRoute {
@@ -115,6 +124,7 @@ function parseRouteFromLocation(): ParsedRoute {
   if (pathname === '/terms') return { view: 'terms', roomCode: '', joinCode: '' };
   if (pathname === '/gst-policy') return { view: 'gst-policy', roomCode: '', joinCode: '' };
   if (pathname === '/refund-policy') return { view: 'refund-policy', roomCode: '', joinCode: '' };
+  if (pathname === '/admin') return { view: 'admin', roomCode: '', joinCode: '' };
 
   return { view: 'home', roomCode: '', joinCode: '' };
 }
@@ -310,6 +320,30 @@ export default function App() {
   );
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [guideOpen, setGuideOpen] = useState(false);
+  const [soundEnabled, setSoundEnabledState] = useState<boolean>(() =>
+    readSoundEnabled()
+  );
+
+  const handleToggleSound = useCallback(() => {
+    setSoundEnabledState((prev) => {
+      const next = !prev;
+      setSoundEnabled(next);
+      if (next) {
+        playSound('click');
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    const onDocumentClick = (event: MouseEvent) => {
+      if (getInteractiveClickTarget(event.target)) {
+        playSound('click');
+      }
+    };
+    document.addEventListener('click', onDocumentClick);
+    return () => document.removeEventListener('click', onDocumentClick);
+  }, []);
 
   const handleSavePlayerName = useCallback((name: string) => {
     setPlayerName(name);
@@ -396,6 +430,7 @@ export default function App() {
       setActivePlayerId(null);
       setView(target);
       setBannerError(null);
+      playSound('lobbyTransition');
       navigatePath(ROUTE_TO_PATH[target]);
     },
     [activePlayerId, activeRoom, navigatePath, updateHostedRooms]
@@ -406,6 +441,7 @@ export default function App() {
     setActivePlayerId(null);
     setView('home');
     setBannerError(null);
+    playSound('lobbyTransition');
     navigatePath('/');
   }, [navigatePath]);
 
@@ -414,6 +450,7 @@ export default function App() {
     setActivePlayerId(null);
     setView('lobby');
     setBannerError(null);
+    playSound('lobbyTransition');
     navigatePath('/lobby');
   }, [navigatePath]);
 
@@ -423,6 +460,9 @@ export default function App() {
       setActivePlayerId(playerId);
       setView('room');
       setBannerError(null);
+      if (!replace) {
+        playSound('lobbyEnter');
+      }
       writeStoredSession({ roomCode: room.code, playerId });
       updateHostedRooms((prev) => {
         if (!prev[room.code]) return prev;
@@ -440,6 +480,9 @@ export default function App() {
       setActiveRoom(null);
       setActivePlayerId(null);
       setView('lobby');
+      if (!replace) {
+        playSound('lobbyTransition');
+      }
       writeStoredSession(null);
       navigatePath('/lobby', replace);
     },
@@ -648,6 +691,7 @@ export default function App() {
       ...prev,
       [room.code]: playerId,
     }));
+    playSound('matchCreated');
     fetchHubSnapshot().then(setHub).catch(() => {});
   };
 
@@ -670,12 +714,18 @@ export default function App() {
     }
   };
 
+  if (view === 'admin') {
+    return <AdminPanelPage onExitAdmin={() => navigateToRoute('home')} />;
+  }
+
   return (
     <div className="min-h-screen w-full overflow-x-clip bg-[#F8F7F4] flex flex-col">
       <Header
         currentView={view}
         sidebarOpen={sidebarOpen}
         walletBalance={wallet.balance}
+        soundEnabled={soundEnabled}
+        onToggleSound={handleToggleSound}
         onOpenSidebar={() => setSidebarOpen(true)}
         onNavigateHome={navigateHome}
         onNavigateWallet={() => navigateToRoute('wallet')}
@@ -836,7 +886,7 @@ export default function App() {
 
       <footer className="border-t border-[#16181D]/8 px-4 pt-4 pb-[calc(5.25rem+env(safe-area-inset-bottom))] sm:px-8 md:pb-4 flex items-center justify-center sm:justify-between gap-4 text-[11px] sm:text-xs text-[#5A606D]">
         <span className="whitespace-nowrap truncate">
-          © 2026 LudoBridge · All Rights Reserved
+          © 2026 Ludo league.online · All Rights Reserved
         </span>
         <span className="hidden sm:inline whitespace-nowrap">
           2-Player Ludo King Matchmaking
@@ -855,6 +905,7 @@ export default function App() {
       />
 
       <GuideModal open={guideOpen} onClose={() => setGuideOpen(false)} />
+      <OfflineIndicator />
     </div>
   );
 }

@@ -7,6 +7,7 @@ import {
   Home,
   Receipt,
   RotateCcw,
+  ShieldCheck,
   Trophy,
   User,
   Wallet,
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { AvatarId } from '../shared/matchmaking';
 import { PlayerAvatar } from './PlayerAvatar';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export type AppViewRoute =
   | 'home'
@@ -28,7 +30,8 @@ export type AppViewRoute =
   | 'referral'
   | 'terms'
   | 'gst-policy'
-  | 'refund-policy';
+  | 'refund-policy'
+  | 'admin';
 
 interface SidebarDrawerProps {
   open: boolean;
@@ -104,9 +107,17 @@ export function SidebarDrawer({
 
       <aside className="relative z-10 flex h-full w-72 max-w-[85vw] flex-col bg-[#F8F7F4] shadow-2xl border-r border-[#16181D]/10">
         <div className="flex items-center justify-between border-b border-[#16181D]/8 px-5 py-4">
-          <span className="font-display text-lg font-bold tracking-tight text-[#16181D]">
-            LudoBridge
-          </span>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <img
+              src="/logo.png"
+              alt="Ludo league.online logo"
+              referrerPolicy="no-referrer"
+              className="h-8 w-8 rounded-lg object-cover shadow-xs shrink-0"
+            />
+            <span className="font-display text-base font-bold tracking-tight text-[#16181D] truncate">
+              Ludo league.online
+            </span>
+          </div>
           <button
             type="button"
             onClick={onClose}
@@ -192,6 +203,34 @@ export function SidebarDrawer({
                 </a>
               );
             })}
+          </div>
+
+          <div className="border-t border-[#16181D]/8 pt-4 space-y-1">
+            <p className="px-3.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-[#5A606D]">
+              Administration
+            </p>
+            <a
+              href="/admin"
+              onClick={(e) => {
+                e.preventDefault();
+                handleSelect('admin');
+              }}
+              className={`flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-colors ${
+                currentView === 'admin'
+                  ? 'bg-[#0D7A5F] text-white shadow-xs'
+                  : 'text-[#16181D] hover:bg-white'
+              }`}
+            >
+              <ShieldCheck
+                className={`h-4 w-4 shrink-0 ${currentView === 'admin' ? 'text-white' : 'text-[#0D7A5F]'}`}
+                aria-hidden="true"
+              />
+              <span>Admin Panel</span>
+            </a>
+          </div>
+
+          <div className="pt-1">
+            <PWAInstallButton variant="sidebar" onAfterAction={onClose} />
           </div>
         </nav>
 

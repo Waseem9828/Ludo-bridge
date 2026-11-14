@@ -47,7 +47,7 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
       : `/?ref=${referralCode}`;
 
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(
-    `Play 2-player Ludo Classic with me on LudoBridge! Use referral code ${referralCode}: ${referralUrl}`
+    `Play 2-player Ludo Classic with me on Ludo league.online! Use referral code ${referralCode}: ${referralUrl}`
   )}`;
 
   const referralHistory = useMemo(
@@ -90,8 +90,8 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
     if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
       try {
         await navigator.share({
-          title: 'Join LudoBridge',
-          text: `Use my referral code ${referralCode} on LudoBridge and play 1v1 Ludo Classic!`,
+          title: 'Join Ludo league.online',
+          text: `Use my referral code ${referralCode} on Ludo league.online and play 1v1 Ludo Classic!`,
           url: referralUrl,
         });
         return;
@@ -369,7 +369,7 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
               <div className="min-w-0">
                 <p className="text-sm font-bold text-[#16181D]">Friend Plays a Battle</p>
                 <p className="mt-0.5 text-xs leading-relaxed text-[#5A606D]">
-                  Your friend joins LudoBridge and completes a 1v1 Ludo Classic match.
+                  Your friend joins Ludo league.online and completes a 1v1 Ludo Classic match.
                 </p>
               </div>
             </li>

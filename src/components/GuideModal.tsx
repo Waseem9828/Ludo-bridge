@@ -47,7 +47,7 @@ export function GuideModal({ open, onClose }: GuideModalProps) {
           </li>
           <li>
             <strong className="text-[#16181D]">2. Create Room in Ludo King:</strong>{' '}
-            Once both friends are seated, the Host opens the Ludo King app, taps <strong>Play with Friends → Create</strong>, and pastes the 8-digit Room Code into LudoBridge.
+            Once both friends are seated, the Host opens the Ludo King app, taps <strong>Play with Friends → Create</strong>, and pastes the 8-digit Room Code into Ludo league.online.
           </li>
           <li>
             <strong className="text-[#16181D]">3. Copy Code &amp; Join in App:</strong>{' '}
