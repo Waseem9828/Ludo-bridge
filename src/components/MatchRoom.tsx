@@ -1,9 +1,11 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   Check,
+  CheckCircle2,
   Copy,
   ExternalLink,
   RotateCcw,
+  ShieldCheck,
   Smartphone,
   Trophy,
   XCircle,
@@ -11,12 +13,17 @@ import {
 import {
   CANCEL_JOIN_REASONS,
   formatLudoKingCode,
+  getResultConfirmationState,
   validateCancelReason,
   validateLudoKingCode,
   type AvatarId,
   type MatchRoom,
 } from '../shared/matchmaking';
 import { PlayerAvatar } from './PlayerAvatar';
+import {
+  PostMatchResultModal,
+  type PendingResultSelection,
+} from './PostMatchResultModal';
 
 interface MatchRoomProps {
   room: MatchRoom;
@@ -26,7 +33,15 @@ interface MatchRoomProps {
   onSubmitLudoCode: (ludoKingCode: string) => Promise<void>;
   onToggleReady: (ready: boolean) => Promise<void>;
   onMarkStarted: () => Promise<void>;
-  onReportWinner: (winnerId: string) => Promise<void>;
+  onReportWinner: (
+    winnerId: string,
+    winnerScreenshot?: string | null
+  ) => Promise<void>;
+  onConfirmResult: (
+    action: 'confirm' | 'dispute',
+    disputeReason?: string,
+    winnerScreenshot?: string | null
+  ) => Promise<void>;
   onRematch: () => Promise<void>;
   onCancelJoin: (reason: string) => Promise<void>;
 }
@@ -40,6 +55,7 @@ export function MatchRoom({
   onToggleReady,
   onMarkStarted,
   onReportWinner,
+  onConfirmResult,
   onRematch,
   onCancelJoin,
 }: MatchRoomProps) {
@@ -52,23 +68,70 @@ export function MatchRoom({
   const [cancelOpen, setCancelOpen] = useState(false);
   const [selectedCancelReason, setSelectedCancelReason] = useState('');
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [pendingResult, setPendingResult] =
+    useState<PendingResultSelection | null>(null);
+  const [postMatchModalOpen, setPostMatchModalOpen] = useState(false);
+  const suppressAutoOpenRef = useRef(false);
+
+  const currentPlayer = room.players.find((p) => p.id === currentPlayerId) ?? null;
+  const opponent = room.players.find((p) => p.id !== currentPlayerId) ?? null;
+  const player1 = room.players[0] ?? null;
+  const player2 = room.players[1] ?? null;
+  const confirmationSummary = getResultConfirmationState(room, currentPlayerId);
+  const hasReportedResult = room.status === 'completed' && Boolean(room.winnerId);
 
   useEffect(() => {
     setLkCodeInput(room.ludoKingRoomCode ?? '');
     setCodeError(null);
   }, [room.ludoKingRoomCode, room.roundNumber]);
 
-  const currentPlayer = room.players.find((p) => p.id === currentPlayerId) ?? null;
-  const opponent = room.players.find((p) => p.id !== currentPlayerId) ?? null;
-  const player1 = room.players[0] ?? null;
-  const player2 = room.players[1] ?? null;
+  useEffect(() => {
+    if (!hasReportedResult) {
+      suppressAutoOpenRef.current = false;
+      setPostMatchModalOpen(false);
+      return;
+    }
 
-  const battleStatusBadge =
-    room.status === 'completed'
+    setPendingResult(null);
+    if (suppressAutoOpenRef.current) {
+      suppressAutoOpenRef.current = false;
+      return;
+    }
+
+    if (confirmationSummary.currentUserNeedsToConfirm) {
+      setPostMatchModalOpen(true);
+    }
+  }, [
+    hasReportedResult,
+    confirmationSummary.currentUserNeedsToConfirm,
+    room.roundNumber,
+  ]);
+
+  const battleStatusBadge = hasReportedResult
+    ? confirmationSummary.battleResultStatus === 'completed'
       ? 'Completed'
-      : player2
-        ? 'Playing'
-        : 'Waiting';
+      : confirmationSummary.battleResultStatus === 'disputed'
+        ? 'Disputed'
+        : 'Pending'
+    : player2
+      ? 'Playing'
+      : 'Waiting';
+
+  const battleBadgeClasses = hasReportedResult
+    ? confirmationSummary.battleResultStatus === 'completed'
+      ? 'bg-white text-[#064E3B]'
+      : confirmationSummary.battleResultStatus === 'disputed'
+        ? 'bg-[#FEE2E2] text-[#991B1B]'
+        : 'bg-[#FEF3C7] text-[#92400E]'
+    : 'bg-white text-[#064E3B]';
+
+  const battleBadgeDotClasses = hasReportedResult
+    ? confirmationSummary.battleResultStatus === 'completed'
+      ? 'bg-[#0D7A5F]'
+      : confirmationSummary.battleResultStatus === 'disputed'
+        ? 'bg-[#991B1B]'
+        : 'bg-[#D97706]'
+    : 'bg-[#0D7A5F]';
 
   const copyLudoCode = async (value: string) => {
     try {
@@ -132,11 +195,34 @@ export function MatchRoom({
       className="w-full max-w-full overflow-x-hidden px-4 py-5 sm:p-8 space-y-5"
       data-testid="match-room"
     >
-      {/* Top: Exact Lobby-Style Battle Card showing both players */}
+      {/* Top: Exact Lobby-Style Battle Card showing both players (click after submit to open verification popup) */}
       <section
-        aria-label="Active battle players"
+        aria-label={
+          hasReportedResult
+            ? `Active battle players, status ${battleStatusBadge}. Tap to open result confirmation`
+            : 'Active battle players'
+        }
         data-testid="room-battle-card"
-        className="w-full min-w-0 overflow-hidden rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] p-4 sm:p-5 text-white shadow-emerald-card"
+        role={hasReportedResult ? 'button' : undefined}
+        tabIndex={hasReportedResult ? 0 : undefined}
+        onClick={
+          hasReportedResult ? () => setPostMatchModalOpen(true) : undefined
+        }
+        onKeyDown={
+          hasReportedResult
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setPostMatchModalOpen(true);
+                }
+              }
+            : undefined
+        }
+        className={`w-full min-w-0 overflow-hidden rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] p-4 sm:p-5 text-white shadow-emerald-card transition-shadow ${
+          hasReportedResult
+            ? 'cursor-pointer hover:ring-2 hover:ring-[#FCD34D]/70 focus:outline-none focus:ring-2 focus:ring-[#FCD34D]'
+            : ''
+        }`}
       >
         <div className="flex items-center justify-between gap-2 pb-3">
           <h1 className="font-display text-lg sm:text-xl font-bold tracking-tight text-white truncate">
@@ -155,8 +241,14 @@ export function MatchRoom({
                 ₹{room.amount.toLocaleString('en-IN')}
               </span>
             </p>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-[11px] font-bold text-[#064E3B] shadow-pill-btn whitespace-nowrap shrink-0">
-              <span className="h-2 w-2 rounded-full bg-[#0D7A5F]" aria-hidden="true" />
+            <span
+              data-testid="room-battle-status-badge"
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold shadow-pill-btn whitespace-nowrap shrink-0 ${battleBadgeClasses}`}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${battleBadgeDotClasses}`}
+                aria-hidden="true"
+              />
               <span>{battleStatusBadge}</span>
             </span>
           </div>
@@ -193,15 +285,28 @@ export function MatchRoom({
         </div>
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#A7F3D0]">
-          <span className="truncate">
-            {player1 ? `${player1.name} (Host)` : 'Host'}
-            {player1?.id === currentPlayerId ? ' · You' : ''}
-          </span>
-          <span className="truncate">
-            {player2
-              ? `${player2.name} (Opponent)${player2.id === currentPlayerId ? ' · You' : ''}`
-              : 'Waiting for opponent'}
-          </span>
+          {hasReportedResult ? (
+            <>
+              <span className="font-semibold text-[#FCD34D] truncate">
+                Tap battle card to view result & confirmation
+              </span>
+              <span className="text-white/80 whitespace-nowrap">
+                {battleStatusBadge}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="truncate">
+                {player1 ? `${player1.name} (Host)` : 'Host'}
+                {player1?.id === currentPlayerId ? ' · You' : ''}
+              </span>
+              <span className="truncate">
+                {player2
+                  ? `${player2.name} (Opponent)${player2.id === currentPlayerId ? ' · You' : ''}`
+                  : 'Waiting for opponent'}
+              </span>
+            </>
+          )}
         </div>
       </section>
 
@@ -363,22 +468,66 @@ export function MatchRoom({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-semibold text-[#3F2915]">
-                    Round {room.roundNumber} Complete
+                    Round {room.roundNumber} · Battle {battleStatusBadge}
                   </p>
                   <h3 className="font-display text-lg sm:text-xl font-bold text-[#16181D] break-words">
                     {room.winnerName} won in Ludo King
                   </h3>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => runAction('rematch', onRematch)}
-                disabled={busyAction === 'rematch'}
-                className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 rounded-full bg-white px-5 py-2.5 text-xs font-bold text-[#16181D] shadow-pill-btn hover:bg-[#FAF9F5]"
-              >
-                <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Rematch (Swap Host)</span>
-              </button>
+
+              <div className="flex flex-wrap items-center gap-2 rounded-xl bg-white/75 px-3.5 py-2.5 text-xs font-semibold text-[#16181D]">
+                <span className="inline-flex items-center gap-1 text-[#064E3B]">
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    Winner: {confirmationSummary.winnerConfirmed ? 'Confirmed' : 'Pending'}
+                  </span>
+                </span>
+                <span className="text-[#16181D]/30">·</span>
+                <span
+                  className={
+                    confirmationSummary.disputed
+                      ? 'text-[#991B1B]'
+                      : confirmationSummary.loserConfirmed
+                        ? 'text-[#064E3B]'
+                        : 'text-[#92400E]'
+                  }
+                >
+                  Loser:{' '}
+                  {confirmationSummary.disputed
+                    ? 'Disputed'
+                    : confirmationSummary.loserConfirmed
+                      ? 'Confirmed'
+                      : 'Pending'}
+                </span>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  data-testid="open-post-match-modal-btn"
+                  onClick={() => setPostMatchModalOpen(true)}
+                  className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 rounded-full bg-[#0D7A5F] px-4 py-2.5 text-xs font-bold text-white shadow-pill-btn hover:bg-[#09604A] whitespace-nowrap"
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>
+                    {confirmationSummary.currentUserNeedsToConfirm
+                      ? confirmationSummary.isCurrentUserWinner
+                        ? 'Confirm Your Victory'
+                        : 'Confirm Result'
+                      : 'Result Confirmation'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => runAction('rematch', onRematch)}
+                  disabled={busyAction === 'rematch'}
+                  className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 rounded-full bg-white px-4 py-2.5 text-xs font-bold text-[#16181D] shadow-pill-btn hover:bg-[#FAF9F5] whitespace-nowrap"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Rematch (Swap Host)</span>
+                </button>
+              </div>
             </div>
           ) : (
             <div className="space-y-4">
@@ -434,9 +583,10 @@ export function MatchRoom({
                       type="button"
                       data-testid="btn-i-win"
                       disabled={busyAction === 'winner' || !opponent}
-                      onClick={() =>
-                        runAction('winner', () => onReportWinner(currentPlayer.id))
-                      }
+                      onClick={() => {
+                        setPendingResult({ winnerId: currentPlayer.id, role: 'winner' });
+                        setPostMatchModalOpen(true);
+                      }}
                       className="inline-flex min-h-[40px] min-w-0 w-full items-center justify-center gap-1 rounded-full bg-[#0D7A5F] px-2 sm:px-3 py-2 text-[11px] sm:text-xs font-bold text-white shadow-pill-btn hover:bg-[#09604A] disabled:opacity-50 whitespace-nowrap"
                     >
                       <Trophy className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -447,9 +597,11 @@ export function MatchRoom({
                       type="button"
                       data-testid="btn-i-lost"
                       disabled={busyAction === 'winner' || !opponent}
-                      onClick={() =>
-                        opponent && runAction('winner', () => onReportWinner(opponent.id))
-                      }
+                      onClick={() => {
+                        if (!opponent) return;
+                        setPendingResult({ winnerId: opponent.id, role: 'loser' });
+                        setPostMatchModalOpen(true);
+                      }}
                       className="inline-flex min-h-[40px] min-w-0 w-full items-center justify-center gap-1 rounded-full bg-white px-2 sm:px-3 py-2 text-[11px] sm:text-xs font-bold text-[#16181D] shadow-pill-btn hover:bg-[#FAF9F5] disabled:opacity-50 whitespace-nowrap"
                     >
                       <span>I Lost</span>
@@ -558,6 +710,34 @@ export function MatchRoom({
           )}
         </section>
       </div>
+
+      <PostMatchResultModal
+        open={postMatchModalOpen}
+        room={room}
+        currentPlayer={currentPlayer}
+        currentPlayerAvatarId={currentPlayerAvatarId}
+        pendingSelection={pendingResult}
+        busyAction={busyAction}
+        onClose={() => {
+          setPostMatchModalOpen(false);
+          if (room.status !== 'completed') {
+            setPendingResult(null);
+          }
+        }}
+        onConfirmInitialReport={(winnerId, winnerScreenshot) => {
+          suppressAutoOpenRef.current = true;
+          return runAction('winner', () =>
+            onReportWinner(winnerId, winnerScreenshot)
+          );
+        }}
+        onConfirmPostMatch={(action, disputeReason, winnerScreenshot) => {
+          suppressAutoOpenRef.current = true;
+          return runAction('confirm-result', () =>
+            onConfirmResult(action, disputeReason, winnerScreenshot)
+          );
+        }}
+        onRematch={() => runAction('rematch', onRematch)}
+      />
     </div>
   );
 }

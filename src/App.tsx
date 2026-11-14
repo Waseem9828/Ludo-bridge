@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  confirmMatchResult,
   createLobby,
   fetchHubSnapshot,
   fetchRoom,
@@ -30,9 +31,11 @@ import { WalletPage } from './components/WalletPage';
 import { useMatchmakingSocket } from './hooks/useMatchmakingSocket';
 import {
   AVATAR_IDS,
+  createPersonalMatchRecordFromRoom,
   isValidAvatarId,
   normalizeLobbyCode,
   type AvatarId,
+  type CompletedMatchRecord,
   type HubSnapshot,
   type MatchRoom as MatchRoomType,
   type WalletTransaction,
@@ -43,6 +46,7 @@ const PLAYER_AVATAR_KEY = 'ludobridge.avatarId';
 const ACTIVE_SESSION_KEY = 'ludobridge.activeSession';
 const HOSTED_ROOMS_KEY = 'ludobridge.hostedRooms';
 const WALLET_KEY = 'ludobridge.wallet';
+const PERSONAL_MATCHES_KEY = 'ludobridge.personalMatches';
 
 interface StoredSession {
   roomCode: string;
@@ -260,12 +264,34 @@ function writeWalletState(wallet: StoredWallet): void {
   }
 }
 
+function readPersonalMatches(): CompletedMatchRecord[] {
+  try {
+    const raw = window.localStorage.getItem(PERSONAL_MATCHES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as CompletedMatchRecord[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePersonalMatches(records: CompletedMatchRecord[]): void {
+  try {
+    window.localStorage.setItem(PERSONAL_MATCHES_KEY, JSON.stringify(records));
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export default function App() {
   const [initialRoute] = useState<ParsedRoute>(() => parseRouteFromLocation());
   const [view, setView] = useState<AppViewRoute>(() => initialRoute.view);
   const [playerName, setPlayerName] = useState<string>(() => getOrCreatePlayerName());
   const [avatarId, setAvatarId] = useState<AvatarId>(() => getOrCreateAvatarId());
   const [wallet, setWallet] = useState<StoredWallet>(() => readWalletState());
+  const [personalMatches, setPersonalMatches] = useState<CompletedMatchRecord[]>(() =>
+    readPersonalMatches()
+  );
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hostedRooms, setHostedRooms] = useState<Record<string, string>>(() =>
     readHostedRooms()
@@ -525,6 +551,24 @@ export default function App() {
     },
   });
 
+  // Record user's completed room into personal match history automatically
+  useEffect(() => {
+    if (!activeRoom || !activePlayerId || activeRoom.status !== 'completed') return;
+    const isParticipant = activeRoom.players.some((p) => p.id === activePlayerId);
+    if (!isParticipant) return;
+    const record = createPersonalMatchRecordFromRoom(activeRoom);
+    if (!record) return;
+    setPersonalMatches((prev) => {
+      const idx = prev.findIndex((item) => item.id === record.id);
+      const next =
+        idx >= 0
+          ? prev.map((item, i) => (i === idx ? record : item))
+          : [record, ...prev].slice(0, 50);
+      writePersonalMatches(next);
+      return next;
+    });
+  }, [activePlayerId, activeRoom]);
+
   // Automatically enter /room/:code for the host when Player 2 accepts their Open Battle
   useEffect(() => {
     if (view === 'room' || activeRoom || restoringRoom) return;
@@ -688,10 +732,25 @@ export default function App() {
               const { room } = await markMatchStarted(activeRoom.code);
               setActiveRoom(room);
             }}
-            onReportWinner={async (winnerId) => {
-              const { room } = await reportWinner(activeRoom.code, winnerId);
+            onReportWinner={async (winnerId, winnerScreenshot) => {
+              const { room } = await reportWinner(
+                activeRoom.code,
+                winnerId,
+                activePlayerId,
+                winnerScreenshot
+              );
               setActiveRoom(room);
               fetchHubSnapshot().then(setHub).catch(() => {});
+            }}
+            onConfirmResult={async (action, disputeReason, winnerScreenshot) => {
+              const { room } = await confirmMatchResult(
+                activeRoom.code,
+                activePlayerId,
+                action,
+                disputeReason,
+                winnerScreenshot
+              );
+              setActiveRoom(room);
             }}
             onRematch={async () => {
               const { room } = await requestRematch(activeRoom.code);
@@ -747,7 +806,10 @@ export default function App() {
             hub={hub}
             loadingHub={loadingHub}
             walletTransactions={wallet.transactions}
+            personalMatches={personalMatches}
             playerName={playerName}
+            avatarId={avatarId}
+            onPlayBattle={() => navigateToRoute('lobby')}
           />
         ) : view === 'leaderboard' ? (
           <LeaderboardPage

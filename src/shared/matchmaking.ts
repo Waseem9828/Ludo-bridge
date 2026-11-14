@@ -28,6 +28,21 @@ export interface ChatMessage {
   createdAt: string;
 }
 
+export interface MatchResultReport {
+  reportedWinnerId: string;
+  reportedWinnerName: string;
+  reportedByPlayerId: string;
+  reportedByPlayerName: string;
+  reportedAt: string;
+  winnerConfirmed: boolean;
+  winnerConfirmedAt: string | null;
+  loserConfirmed: boolean;
+  loserConfirmedAt: string | null;
+  winnerScreenshot?: string | null;
+  disputedByPlayerId?: string | null;
+  disputeReason?: string | null;
+}
+
 export interface MatchRoom {
   code: string;
   visibility: LobbyVisibility;
@@ -42,6 +57,7 @@ export interface MatchRoom {
   players: PlayerSeat[];
   winnerId: string | null;
   winnerName: string | null;
+  resultReport?: MatchResultReport | null;
   roundNumber: number;
   messages: ChatMessage[];
 }
@@ -308,6 +324,55 @@ export function getMockReferralHistory(
   ];
 }
 
+export function buildPlayerReferralCode(playerName: string): string {
+  const cleanTag =
+    playerName
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 6) || 'PLAYER';
+  return `LB${cleanTag}`;
+}
+
+export function computeReferralSummary(records: ReferralRecord[]): {
+  totalInvited: number;
+  creditedCount: number;
+  totalEarned: number;
+} {
+  return records.reduce(
+    (acc, rec) => {
+      acc.totalInvited += 1;
+      if (rec.status === 'Credited') {
+        acc.creditedCount += 1;
+        acc.totalEarned += rec.bonusAmount;
+      }
+      return acc;
+    },
+    { totalInvited: 0, creditedCount: 0, totalEarned: 0 }
+  );
+}
+
+export function validateReferralCodeInput(
+  raw: string,
+  ownCode: string
+): { valid: boolean; value: string; error?: string } {
+  const cleaned = raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (cleaned.length < 4 || cleaned.length > 12) {
+    return {
+      valid: false,
+      value: cleaned,
+      error: 'Enter a valid 4–12 character referral code (e.g. LBRAHUL).',
+    };
+  }
+  if (cleaned === ownCode.trim().toUpperCase()) {
+    return {
+      valid: false,
+      value: cleaned,
+      error: 'You cannot apply your own referral code.',
+    };
+  }
+  return { valid: true, value: cleaned };
+}
+
 export interface AnimatedBattleEntry {
   room: MatchRoom;
   exiting: boolean;
@@ -398,6 +463,7 @@ export function applyRematchReset(room: MatchRoom, nowIso: string): MatchRoom {
     ludoKingRoomCode: null,
     winnerId: null,
     winnerName: null,
+    resultReport: null,
     roundNumber: nextRound,
     updatedAt: nowIso,
     players: swappedPlayers,
@@ -418,6 +484,241 @@ export function applyRematchReset(room: MatchRoom, nowIso: string): MatchRoom {
   };
 
   return updated;
+}
+
+export function validateWinnerScreenshot(
+  raw: string | null | undefined,
+  requireScreenshot: boolean
+): { valid: boolean; value: string | null; error?: string } {
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  if (!trimmed) {
+    if (requireScreenshot) {
+      return {
+        valid: false,
+        value: null,
+        error: 'Please upload your Ludo King winning screenshot before confirming victory.',
+      };
+    }
+    return { valid: true, value: null };
+  }
+  if (!/^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/.test(trimmed)) {
+    return {
+      valid: false,
+      value: null,
+      error: 'Winning screenshot must be a valid image file (PNG, JPG, or WebP).',
+    };
+  }
+  if (trimmed.length > 1_600_000) {
+    return {
+      valid: false,
+      value: null,
+      error: 'Screenshot is too large. Please choose a smaller image.',
+    };
+  }
+  return { valid: true, value: trimmed };
+}
+
+export function createInitialResultReport(
+  room: Pick<MatchRoom, 'players'>,
+  winnerId: string,
+  reportedByPlayerId: string | undefined,
+  nowIso: string,
+  winnerScreenshot?: string | null
+): MatchResultReport {
+  const winner = room.players.find((p) => p.id === winnerId) ?? room.players[0];
+  const loser = room.players.find((p) => p.id !== winnerId) ?? null;
+  const reporterId = reportedByPlayerId || winnerId;
+  const reporter =
+    room.players.find((p) => p.id === reporterId) ?? winner;
+
+  const reportedByWinner = reporterId === winner.id;
+  const reportedByLoser = Boolean(loser && reporterId === loser.id);
+  const cleanShot =
+    typeof winnerScreenshot === 'string' && winnerScreenshot.trim()
+      ? winnerScreenshot.trim()
+      : null;
+
+  return {
+    reportedWinnerId: winner.id,
+    reportedWinnerName: winner.name,
+    reportedByPlayerId: reporter.id,
+    reportedByPlayerName: reporter.name,
+    reportedAt: nowIso,
+    winnerConfirmed: reportedByWinner,
+    winnerConfirmedAt: reportedByWinner ? nowIso : null,
+    loserConfirmed: reportedByLoser,
+    loserConfirmedAt: reportedByLoser ? nowIso : null,
+    winnerScreenshot: cleanShot,
+    disputedByPlayerId: null,
+    disputeReason: null,
+  };
+}
+
+export function applyResultConfirmation(
+  room: MatchRoom,
+  playerId: string,
+  action: 'confirm' | 'dispute',
+  nowIso: string,
+  disputeReason?: string,
+  winnerScreenshot?: string | null
+): MatchRoom {
+  if (!room.winnerId) {
+    return room;
+  }
+
+  const player = room.players.find((p) => p.id === playerId);
+  if (!player) {
+    return room;
+  }
+
+  const baseReport: MatchResultReport =
+    room.resultReport ??
+    createInitialResultReport(room, room.winnerId, room.winnerId, room.updatedAt);
+
+  const isWinner = player.id === room.winnerId;
+
+  if (action === 'dispute') {
+    const cleanReason =
+      (disputeReason ?? '').trim().replace(/\s+/g, ' ').slice(0, 140) ||
+      'Result disputed by player';
+    return {
+      ...room,
+      updatedAt: nowIso,
+      resultReport: {
+        ...baseReport,
+        disputedByPlayerId: player.id,
+        disputeReason: cleanReason,
+      },
+      messages: [
+        ...room.messages,
+        {
+          id: `sys-dispute-${nowIso}-${player.id}`,
+          senderId: 'system',
+          senderName: 'Matchmaker',
+          text: `${player.name} flagged the reported result (${cleanReason}).`,
+          kind: 'system',
+          createdAt: nowIso,
+        },
+      ],
+    };
+  }
+
+  const nextScreenshot =
+    typeof winnerScreenshot === 'string' && winnerScreenshot.trim()
+      ? winnerScreenshot.trim()
+      : baseReport.winnerScreenshot ?? null;
+
+  const nextReport: MatchResultReport = isWinner
+    ? {
+        ...baseReport,
+        winnerConfirmed: true,
+        winnerConfirmedAt: baseReport.winnerConfirmedAt ?? nowIso,
+        winnerScreenshot: nextScreenshot,
+        disputedByPlayerId:
+          baseReport.disputedByPlayerId === player.id ? null : baseReport.disputedByPlayerId,
+        disputeReason:
+          baseReport.disputedByPlayerId === player.id ? null : baseReport.disputeReason,
+      }
+    : {
+        ...baseReport,
+        loserConfirmed: true,
+        loserConfirmedAt: baseReport.loserConfirmedAt ?? nowIso,
+        disputedByPlayerId:
+          baseReport.disputedByPlayerId === player.id ? null : baseReport.disputedByPlayerId,
+        disputeReason:
+          baseReport.disputedByPlayerId === player.id ? null : baseReport.disputeReason,
+      };
+
+  return {
+    ...room,
+    updatedAt: nowIso,
+    resultReport: nextReport,
+    messages: [
+      ...room.messages,
+      {
+        id: `sys-confirm-${nowIso}-${player.id}`,
+        senderId: 'system',
+        senderName: 'Matchmaker',
+        text: isWinner
+          ? `${player.name} confirmed their Round ${room.roundNumber} victory.`
+          : `${player.name} confirmed the Round ${room.roundNumber} match result.`,
+        kind: 'system',
+        createdAt: nowIso,
+      },
+    ],
+  };
+}
+
+export type BattleResultStatus = 'pending' | 'completed' | 'disputed';
+
+export interface ResultConfirmationSummary {
+  winner: PlayerSeat | null;
+  loser: PlayerSeat | null;
+  winnerConfirmed: boolean;
+  loserConfirmed: boolean;
+  bothConfirmed: boolean;
+  battleResultStatus: BattleResultStatus;
+  winnerScreenshot: string | null;
+  isCurrentUserWinner: boolean;
+  isCurrentUserLoser: boolean;
+  currentUserConfirmed: boolean;
+  currentUserNeedsToConfirm: boolean;
+  disputed: boolean;
+  disputeReason: string | null;
+}
+
+export function getResultConfirmationState(
+  room: Pick<MatchRoom, 'players' | 'winnerId' | 'resultReport' | 'updatedAt'>,
+  currentPlayerId: string
+): ResultConfirmationSummary {
+  const winner = room.winnerId
+    ? room.players.find((p) => p.id === room.winnerId) ?? null
+    : null;
+  const loser = room.winnerId
+    ? room.players.find((p) => p.id !== room.winnerId) ?? null
+    : null;
+
+  const report = room.resultReport ?? null;
+  const winnerConfirmed = Boolean(report?.winnerConfirmed);
+  const loserConfirmed = Boolean(report?.loserConfirmed);
+  const disputed = Boolean(report?.disputedByPlayerId);
+  const bothConfirmed = Boolean(
+    winner && loser && winnerConfirmed && loserConfirmed && !disputed
+  );
+  const battleResultStatus: BattleResultStatus = disputed
+    ? 'disputed'
+    : bothConfirmed
+      ? 'completed'
+      : 'pending';
+
+  const isCurrentUserWinner = Boolean(winner && winner.id === currentPlayerId);
+  const isCurrentUserLoser = Boolean(loser && loser.id === currentPlayerId);
+  const currentUserConfirmed = isCurrentUserWinner
+    ? winnerConfirmed
+    : isCurrentUserLoser
+      ? loserConfirmed
+      : false;
+  const currentUserNeedsToConfirm = Boolean(
+    room.winnerId &&
+      (isCurrentUserWinner || isCurrentUserLoser) &&
+      !currentUserConfirmed
+  );
+
+  return {
+    winner,
+    loser,
+    winnerConfirmed,
+    loserConfirmed,
+    bothConfirmed,
+    battleResultStatus,
+    winnerScreenshot: report?.winnerScreenshot ?? null,
+    isCurrentUserWinner,
+    isCurrentUserLoser,
+    currentUserConfirmed,
+    currentUserNeedsToConfirm,
+    disputed,
+    disputeReason: report?.disputeReason ?? null,
+  };
 }
 
 export function describeMatchStatus(status: MatchStatus): {
@@ -617,3 +918,97 @@ export function sumBattleAmounts(rooms: Array<Pick<MatchRoom, 'amount'>>): numbe
     0
   );
 }
+
+export function createPersonalMatchRecordFromRoom(
+  room: MatchRoom
+): CompletedMatchRecord | null {
+  if (!room.winnerId || !room.winnerName || room.players.length < 2) {
+    return null;
+  }
+  return {
+    id: `my-${room.code}-r${room.roundNumber}`,
+    lobbyCode: room.code,
+    mode: room.mode,
+    amount: room.amount ?? 100,
+    stakesLabel: room.stakesLabel ?? 'Friendly',
+    bestOf: room.bestOf,
+    player1Name: room.players[0].name,
+    player1Color: room.players[0].color,
+    player2Name: room.players[1].name,
+    player2Color: room.players[1].color,
+    winnerName: room.winnerName,
+    ludoKingRoomCode: room.ludoKingRoomCode,
+    roundNumber: room.roundNumber,
+    completedAt: room.updatedAt,
+  };
+}
+
+export function filterPersonalMatchHistory(
+  hubMatches: CompletedMatchRecord[],
+  playerName: string,
+  localMatches: CompletedMatchRecord[] = []
+): CompletedMatchRecord[] {
+  const normalized = playerName.trim().toLowerCase();
+  if (!normalized) return [];
+
+  const isParticipant = (m: CompletedMatchRecord) =>
+    m.player1Name.trim().toLowerCase() === normalized ||
+    m.player2Name.trim().toLowerCase() === normalized;
+
+  const seen = new Set<string>();
+  const combined: CompletedMatchRecord[] = [];
+
+  for (const record of [...localMatches, ...hubMatches]) {
+    if (!isParticipant(record)) continue;
+    const dedupKey = `${record.lobbyCode}-${record.roundNumber}-${record.player1Name.toLowerCase()}-${record.player2Name.toLowerCase()}`;
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
+    combined.push(record);
+  }
+
+  return combined.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+}
+
+export function computePersonalMatchSummary(
+  personalMatches: CompletedMatchRecord[],
+  playerName: string
+): {
+  totalGames: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalWonAmount: number;
+  netAmount: number;
+} {
+  const normalized = playerName.trim().toLowerCase();
+  let wins = 0;
+  let totalWonAmount = 0;
+  let netAmount = 0;
+
+  for (const match of personalMatches) {
+    const amount = Number.isFinite(match.amount) && match.amount > 0 ? match.amount : 0;
+    const didWin =
+      Boolean(normalized) && match.winnerName.trim().toLowerCase() === normalized;
+    if (didWin) {
+      wins += 1;
+      totalWonAmount += amount;
+      netAmount += amount;
+    } else {
+      netAmount -= amount;
+    }
+  }
+
+  const totalGames = personalMatches.length;
+  const losses = Math.max(0, totalGames - wins);
+  const winRate = totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0;
+
+  return {
+    totalGames,
+    wins,
+    losses,
+    winRate,
+    totalWonAmount,
+    netAmount,
+  };
+}
+

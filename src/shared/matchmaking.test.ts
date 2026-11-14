@@ -2,14 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyRematchReset,
+  applyResultConfirmation,
   AVATAR_IDS,
+  buildPlayerReferralCode,
   CANCEL_JOIN_REASONS,
   computeMatchStatus,
+  computePersonalMatchSummary,
+  computeReferralSummary,
+  createInitialResultReport,
+  createPersonalMatchRecordFromRoom,
+  filterPersonalMatchHistory,
   filterWalletTransactions,
   formatLudoKingCode,
   getAvatarIdForName,
   getMockLeaderboardData,
   getMockReferralHistory,
+  getResultConfirmationState,
   isValidAvatarId,
   mergeAnimatedBattles,
   normalizeLobbyCode,
@@ -19,7 +27,9 @@ import {
   validateCancelReason,
   validateLudoKingCode,
   validatePlayerName,
+  validateReferralCodeInput,
   validateWalletTransaction,
+  validateWinnerScreenshot,
   type MatchRoom,
   type WalletTransaction,
 } from './matchmaking';
@@ -329,5 +339,234 @@ test('sumBattleAmounts sums seeded open and running battle amounts accurately', 
   assert.equal(sumBattleAmounts(snapshot.runningBattles), 4050);
   assert.equal(sumBattleAmounts([{ amount: 100 }, { amount: 250 }]), 350);
   assert.equal(sumBattleAmounts([]), 0);
+});
+
+test('post-match result confirmation handles winner-first and loser-first flows transparently', () => {
+  const store = createInitialMockStore(1_700_000_000_000);
+  const baseRoom = store.rooms['RN100Z'];
+  const winner = baseRoom.players[0];
+  const loser = baseRoom.players[1];
+
+  // Flow A: Winner claims victory -> Loser confirms result
+  const completedByWinner: MatchRoom = {
+    ...baseRoom,
+    status: 'completed',
+    winnerId: winner.id,
+    winnerName: winner.name,
+    resultReport: createInitialResultReport(baseRoom, winner.id, winner.id, '2026-11-13T18:00:00.000Z'),
+  };
+
+  const winnerView = getResultConfirmationState(completedByWinner, winner.id);
+  assert.equal(winnerView.winnerConfirmed, true);
+  assert.equal(winnerView.loserConfirmed, false);
+  assert.equal(winnerView.currentUserNeedsToConfirm, false);
+
+  const loserViewPending = getResultConfirmationState(completedByWinner, loser.id);
+  assert.equal(loserViewPending.isCurrentUserLoser, true);
+  assert.equal(loserViewPending.currentUserNeedsToConfirm, true);
+
+  const afterLoserConfirm = applyResultConfirmation(
+    completedByWinner,
+    loser.id,
+    'confirm',
+    '2026-11-13T18:00:15.000Z'
+  );
+  const bothDone = getResultConfirmationState(afterLoserConfirm, loser.id);
+  assert.equal(bothDone.bothConfirmed, true);
+  assert.equal(bothDone.currentUserNeedsToConfirm, false);
+
+  // Flow B: Loser admits loss -> Winner explicitly confirms victory
+  const completedByLoser: MatchRoom = {
+    ...baseRoom,
+    status: 'completed',
+    winnerId: winner.id,
+    winnerName: winner.name,
+    resultReport: createInitialResultReport(baseRoom, winner.id, loser.id, '2026-11-13T18:01:00.000Z'),
+  };
+
+  const winnerViewPending = getResultConfirmationState(completedByLoser, winner.id);
+  assert.equal(winnerViewPending.winnerConfirmed, false);
+  assert.equal(winnerViewPending.loserConfirmed, true);
+  assert.equal(winnerViewPending.isCurrentUserWinner, true);
+  assert.equal(winnerViewPending.currentUserNeedsToConfirm, true);
+
+  const afterWinnerConfirm = applyResultConfirmation(
+    completedByLoser,
+    winner.id,
+    'confirm',
+    '2026-11-13T18:01:20.000Z'
+  );
+  assert.equal(getResultConfirmationState(afterWinnerConfirm, winner.id).bothConfirmed, true);
+
+  // Rematch clears old resultReport
+  const rematched = applyRematchReset(afterWinnerConfirm, '2026-11-13T18:02:00.000Z');
+  assert.equal(rematched.resultReport, null);
+  assert.equal(rematched.winnerId, null);
+});
+
+test('applyResultConfirmation supports disputing a reported result cleanly', () => {
+  const store = createInitialMockStore(1_700_000_000_000);
+  const baseRoom = store.rooms['RN100Z'];
+  const winner = baseRoom.players[0];
+  const loser = baseRoom.players[1];
+
+  const completedRoom: MatchRoom = {
+    ...baseRoom,
+    status: 'completed',
+    winnerId: winner.id,
+    winnerName: winner.name,
+    resultReport: createInitialResultReport(baseRoom, winner.id, winner.id, '2026-11-13T18:00:00.000Z'),
+  };
+
+  const disputedRoom = applyResultConfirmation(
+    completedRoom,
+    loser.id,
+    'dispute',
+    '2026-11-13T18:00:10.000Z',
+    'I reached home first'
+  );
+
+  const summary = getResultConfirmationState(disputedRoom, loser.id);
+  assert.equal(summary.disputed, true);
+  assert.equal(summary.disputeReason, 'I reached home first');
+  assert.equal(summary.loserConfirmed, false);
+  assert.equal(summary.battleResultStatus, 'disputed');
+});
+
+test('validateWinnerScreenshot enforces image screenshot for winner claims and stores proof cleanly', () => {
+  const missingReq = validateWinnerScreenshot('', true);
+  assert.equal(missingReq.valid, false);
+
+  const missingOpt = validateWinnerScreenshot('', false);
+  assert.equal(missingOpt.valid, true);
+  assert.equal(missingOpt.value, null);
+
+  const badMime = validateWinnerScreenshot('https://example.com/fake.png', true);
+  assert.equal(badMime.valid, false);
+
+  const samplePng =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const validShot = validateWinnerScreenshot(samplePng, true);
+  assert.equal(validShot.valid, true);
+  assert.equal(validShot.value, samplePng);
+
+  const store = createInitialMockStore(1_700_000_000_000);
+  const baseRoom = store.rooms['RN100Z'];
+  const winner = baseRoom.players[0];
+  const loser = baseRoom.players[1];
+
+  const pendingRoom: MatchRoom = {
+    ...baseRoom,
+    status: 'completed',
+    winnerId: winner.id,
+    winnerName: winner.name,
+    resultReport: createInitialResultReport(
+      baseRoom,
+      winner.id,
+      winner.id,
+      '2026-11-13T18:10:00.000Z',
+      samplePng
+    ),
+  };
+
+  const pendingState = getResultConfirmationState(pendingRoom, winner.id);
+  assert.equal(pendingState.battleResultStatus, 'pending');
+  assert.equal(pendingState.winnerScreenshot, samplePng);
+
+  const completedRoom = applyResultConfirmation(
+    pendingRoom,
+    loser.id,
+    'confirm',
+    '2026-11-13T18:10:20.000Z'
+  );
+  const completedState = getResultConfirmationState(completedRoom, winner.id);
+  assert.equal(completedState.battleResultStatus, 'completed');
+  assert.equal(completedState.winnerScreenshot, samplePng);
+});
+
+test('referral helpers build code, summarize earnings, and validate friend code input', () => {
+  assert.equal(buildPlayerReferralCode('Rahul 99'), 'LBRAHUL9');
+  assert.equal(buildPlayerReferralCode('   '), 'LBPLAYER');
+
+  const history = getMockReferralHistory('Rahul 99', 1_700_000_000_000);
+  const summary = computeReferralSummary(history);
+  assert.equal(summary.totalInvited, 4);
+  assert.equal(summary.creditedCount, 3);
+  assert.equal(summary.totalEarned, 200);
+
+  assert.equal(validateReferralCodeInput('ab', 'LBRAHUL9').valid, false);
+  assert.equal(validateReferralCodeInput('LBRAHUL9', 'LBRAHUL9').valid, false);
+  assert.deepEqual(validateReferralCodeInput(' lb-kiran01 ', 'LBRAHUL9'), {
+    valid: true,
+    value: 'LBKIRAN01',
+  });
+});
+
+test('personal history helpers isolate current player games, deduplicate, and compute stats', () => {
+  const store = createInitialMockStore(1_700_000_000_000);
+  const hub = buildHubSnapshotFromStore(store);
+
+  // Unknown player sees none of the global mock matches
+  assert.equal(filterPersonalMatchHistory(hub.recentMatches, 'Khalil').length, 0);
+
+  // Completed room involving Khalil converts cleanly into personal match record
+  const completedRoom: MatchRoom = {
+    ...store.rooms['RN100Z'],
+    status: 'completed',
+    winnerId: 'p-khalil',
+    winnerName: 'Khalil',
+    updatedAt: '2026-11-13T18:20:00.000Z',
+    players: [
+      {
+        id: 'p-khalil',
+        name: 'Khalil',
+        color: 'Red',
+        isHost: true,
+        readyInApp: true,
+        connected: true,
+        joinedAt: '2026-11-13T18:10:00.000Z',
+      },
+      {
+        id: 'p-zoya',
+        name: 'Zoya',
+        color: 'Yellow',
+        isHost: false,
+        readyInApp: true,
+        connected: true,
+        joinedAt: '2026-11-13T18:11:00.000Z',
+      },
+    ],
+  };
+
+  const rec1 = createPersonalMatchRecordFromRoom(completedRoom);
+  assert.ok(rec1);
+
+  const rec2 = {
+    ...rec1!,
+    id: 'my-RN200B-r1',
+    lobbyCode: 'RN200B',
+    amount: 250,
+    winnerName: 'Zoya',
+    completedAt: '2026-11-13T18:30:00.000Z',
+  };
+
+  // Deduplicates identical lobbyCode+round while excluding other players' matches
+  const filtered = filterPersonalMatchHistory(
+    [...hub.recentMatches, { ...rec1!, id: 'rec-server-copy' }],
+    ' khalil ',
+    [rec1!, rec2]
+  );
+  assert.equal(filtered.length, 2);
+  assert.equal(filtered[0].lobbyCode, 'RN200B');
+
+  const summary = computePersonalMatchSummary(filtered, 'Khalil');
+  assert.deepEqual(summary, {
+    totalGames: 2,
+    wins: 1,
+    losses: 1,
+    winRate: 50,
+    totalWonAmount: 100,
+    netAmount: -150,
+  });
 });
 

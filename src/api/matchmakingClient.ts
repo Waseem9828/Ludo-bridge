@@ -1,11 +1,14 @@
 import {
   applyRematchReset,
+  applyResultConfirmation,
   computeMatchStatus,
+  createInitialResultReport,
   normalizeLobbyCode,
   pickOpponentColor,
   validateBattleAmount,
   validateLudoKingCode,
   validatePlayerName,
+  validateWinnerScreenshot,
   type CompletedMatchRecord,
   type HubSnapshot,
   type LobbyVisibility,
@@ -376,14 +379,16 @@ export function markMatchStarted(code: string): Promise<{ room: MatchRoom }> {
 
 export function reportWinner(
   code: string,
-  winnerId: string
+  winnerId: string,
+  reportedByPlayerId?: string,
+  winnerScreenshot?: string | null
 ): Promise<{ room: MatchRoom }> {
   const norm = normalizeLobbyCode(code);
   return requestJsonWithFallback<{ room: MatchRoom }>(
     `/api/lobbies/${encodeURIComponent(norm)}/winner`,
     {
       method: 'POST',
-      body: JSON.stringify({ winnerId }),
+      body: JSON.stringify({ winnerId, reportedByPlayerId, winnerScreenshot }),
     },
     () => {
       const store = readLocalStore();
@@ -392,11 +397,25 @@ export function reportWinner(
       if (room.players.length < 2) throw new Error('Two seated players are required.');
       const winner = room.players.find((p) => p.id === winnerId);
       if (!winner) throw new Error('Selected winner is not in this match.');
+      const reportedByWinner = Boolean(
+        reportedByPlayerId && reportedByPlayerId === winner.id
+      );
+      const shotCheck = validateWinnerScreenshot(winnerScreenshot, reportedByWinner);
+      if (!shotCheck.valid) {
+        throw new Error(shotCheck.error);
+      }
       const now = new Date().toISOString();
       room.winnerId = winner.id;
       room.winnerName = winner.name;
       room.status = 'completed';
       room.updatedAt = now;
+      room.resultReport = createInitialResultReport(
+        room,
+        winner.id,
+        reportedByPlayerId,
+        now,
+        shotCheck.value
+      );
       room.messages.push({
         id: genLocalId('msg'),
         senderId: 'system',
@@ -425,6 +444,50 @@ export function reportWinner(
       store.recentMatches = store.recentMatches.slice(0, 30);
       writeLocalStore(store);
       return { room };
+    }
+  );
+}
+
+export function confirmMatchResult(
+  code: string,
+  playerId: string,
+  action: 'confirm' | 'dispute' = 'confirm',
+  disputeReason?: string,
+  winnerScreenshot?: string | null
+): Promise<{ room: MatchRoom }> {
+  const norm = normalizeLobbyCode(code);
+  return requestJsonWithFallback<{ room: MatchRoom }>(
+    `/api/lobbies/${encodeURIComponent(norm)}/confirm-result`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ playerId, action, disputeReason, winnerScreenshot }),
+    },
+    () => {
+      const store = readLocalStore();
+      const room = store.rooms[norm];
+      if (!room) throw new Error('Match room not found.');
+      if (!room.winnerId) throw new Error('No match result has been reported yet.');
+      const player = room.players.find((p) => p.id === playerId);
+      if (!player) throw new Error('Only seated players can confirm the match result.');
+      const needsScreenshot =
+        action === 'confirm' &&
+        player.id === room.winnerId &&
+        !room.resultReport?.winnerScreenshot;
+      const shotCheck = validateWinnerScreenshot(winnerScreenshot, needsScreenshot);
+      if (!shotCheck.valid) {
+        throw new Error(shotCheck.error);
+      }
+      const updatedRoom = applyResultConfirmation(
+        room,
+        playerId,
+        action,
+        new Date().toISOString(),
+        disputeReason,
+        shotCheck.value
+      );
+      store.rooms[norm] = updatedRoom;
+      writeLocalStore(store);
+      return { room: updatedRoom };
     }
   );
 }

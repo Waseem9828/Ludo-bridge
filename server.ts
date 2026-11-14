@@ -6,12 +6,15 @@ import crypto from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import {
   applyRematchReset,
+  applyResultConfirmation,
   computeMatchStatus,
+  createInitialResultReport,
   normalizeLobbyCode,
   pickOpponentColor,
   validateBattleAmount,
   validateLudoKingCode,
   validatePlayerName,
+  validateWinnerScreenshot,
   type CompletedMatchRecord,
   type HubSnapshot,
   type LobbyVisibility,
@@ -196,7 +199,7 @@ function parseVisibility(raw: unknown): LobbyVisibility {
 
 async function startServer() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '2mb' }));
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
@@ -558,9 +561,25 @@ async function startServer() {
     }
 
     const winnerId = String(req.body?.winnerId ?? '');
+    const reportedByPlayerId =
+      typeof req.body?.reportedByPlayerId === 'string'
+        ? req.body.reportedByPlayerId
+        : undefined;
     const winner = room.players.find((p) => p.id === winnerId);
     if (!winner) {
       res.status(400).json({ error: 'Selected winner is not in this match.' });
+      return;
+    }
+
+    const reportedByWinner = Boolean(
+      reportedByPlayerId && reportedByPlayerId === winner.id
+    );
+    const shotCheck = validateWinnerScreenshot(
+      req.body?.winnerScreenshot,
+      reportedByWinner
+    );
+    if (!shotCheck.valid) {
+      res.status(400).json({ error: shotCheck.error });
       return;
     }
 
@@ -569,6 +588,13 @@ async function startServer() {
     room.winnerName = winner.name;
     room.status = 'completed';
     room.updatedAt = now;
+    room.resultReport = createInitialResultReport(
+      room,
+      winner.id,
+      reportedByPlayerId,
+      now,
+      shotCheck.value
+    );
     room.messages.push({
       id: createId('msg'),
       senderId: 'system',
@@ -602,6 +628,57 @@ async function startServer() {
     broadcastRoom(room);
     broadcastHub();
     res.json({ room, record });
+  });
+
+  app.post('/api/lobbies/:code/confirm-result', (req, res) => {
+    const code = normalizeLobbyCode(req.params.code);
+    const room = store.rooms[code];
+    if (!room) {
+      res.status(404).json({ error: 'Match room not found.' });
+      return;
+    }
+    if (!room.winnerId) {
+      res.status(400).json({ error: 'No match result has been reported yet.' });
+      return;
+    }
+
+    const playerId = String(req.body?.playerId ?? '');
+    const player = room.players.find((p) => p.id === playerId);
+    if (!player) {
+      res.status(403).json({ error: 'Only seated players can confirm the match result.' });
+      return;
+    }
+
+    const action = req.body?.action === 'dispute' ? 'dispute' : 'confirm';
+    const disputeReason =
+      typeof req.body?.disputeReason === 'string' ? req.body.disputeReason : undefined;
+
+    const needsScreenshot =
+      action === 'confirm' &&
+      player.id === room.winnerId &&
+      !room.resultReport?.winnerScreenshot;
+    const shotCheck = validateWinnerScreenshot(
+      req.body?.winnerScreenshot,
+      needsScreenshot
+    );
+    if (!shotCheck.valid) {
+      res.status(400).json({ error: shotCheck.error });
+      return;
+    }
+
+    const updatedRoom = applyResultConfirmation(
+      room,
+      playerId,
+      action,
+      new Date().toISOString(),
+      disputeReason,
+      shotCheck.value
+    );
+    store.rooms[code] = updatedRoom;
+
+    persistStore();
+    broadcastRoom(updatedRoom);
+    res.json({ room: updatedRoom });
   });
 
   app.post('/api/lobbies/:code/rematch', (req, res) => {
