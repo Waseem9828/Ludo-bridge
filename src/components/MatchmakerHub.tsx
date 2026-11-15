@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ArrowRight, Trash2 } from 'lucide-react';
 import {
+  findParticipantPlayerId,
+  formatCountdownMMSS,
+  getOpenBattleRemainingMs,
   mergeAnimatedBattles,
+  partitionLobbyBattles,
   validateBattleAmount,
   type AnimatedBattleEntry,
   type AvatarId,
   type HubSnapshot,
+  type MatchRoom,
 } from '../shared/matchmaking';
 import { PageTitleHeading } from './PageTitleHeading';
 import { PlayerAvatar } from './PlayerAvatar';
@@ -14,34 +19,57 @@ interface MatchmakerHubProps {
   hub: HubSnapshot;
   loadingHub: boolean;
   hostedRooms: Record<string, string>;
+  myRooms: Record<string, string>;
   playerName: string;
   playerAvatarId: AvatarId;
   onCreateBattle: (amount: number) => Promise<void>;
   onJoinLobby: (code: string) => Promise<void>;
   onDeleteLobby: (code: string, playerId: string) => Promise<void>;
+  onEnterBattle: (room: MatchRoom) => void;
+  onRefreshHub?: () => void;
 }
 
 export function MatchmakerHub({
   hub,
   loadingHub,
   hostedRooms,
+  myRooms,
   playerName,
   playerAvatarId,
   onCreateBattle,
   onJoinLobby,
   onDeleteLobby,
+  onEnterBattle,
+  onRefreshHub,
 }: MatchmakerHubProps) {
   const [amountInput, setAmountInput] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [actionErrorMsg, setActionErrorMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [busyCode, setBusyCode] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  const combinedMyRooms = useMemo(
+    () => ({ ...myRooms, ...hostedRooms }),
+    [hostedRooms, myRooms]
+  );
+
+  const { openList, runningList } = useMemo(
+    () =>
+      partitionLobbyBattles({
+        openLobbies: hub.openLobbies,
+        runningBattles: hub.runningBattles,
+        myRoomPlayerIds: combinedMyRooms,
+        playerName,
+      }),
+    [combinedMyRooms, hub.openLobbies, hub.runningBattles, playerName]
+  );
 
   const [openEntries, setOpenEntries] = useState<AnimatedBattleEntry[]>(() =>
-    hub.openLobbies.map((room) => ({ room, exiting: false }))
+    openList.map((room) => ({ room, exiting: false }))
   );
   const [runningEntries, setRunningEntries] = useState<AnimatedBattleEntry[]>(() =>
-    hub.runningBattles.map((room) => ({ room, exiting: false }))
+    runningList.map((room) => ({ room, exiting: false }))
   );
 
   const amountInputRef = useRef<HTMLInputElement | null>(null);
@@ -49,7 +77,7 @@ export function MatchmakerHub({
   useEffect(() => {
     let timer: number | undefined;
     setOpenEntries((prev) => {
-      const { entries, removedCodes } = mergeAnimatedBattles(prev, hub.openLobbies);
+      const { entries, removedCodes } = mergeAnimatedBattles(prev, openList);
       if (removedCodes.length > 0) {
         timer = window.setTimeout(() => {
           setOpenEntries((curr) => curr.filter((e) => !e.exiting));
@@ -60,12 +88,12 @@ export function MatchmakerHub({
     return () => {
       if (timer) window.clearTimeout(timer);
     };
-  }, [hub.openLobbies]);
+  }, [openList]);
 
   useEffect(() => {
     let timer: number | undefined;
     setRunningEntries((prev) => {
-      const { entries, removedCodes } = mergeAnimatedBattles(prev, hub.runningBattles);
+      const { entries, removedCodes } = mergeAnimatedBattles(prev, runningList);
       if (removedCodes.length > 0) {
         timer = window.setTimeout(() => {
           setRunningEntries((curr) => curr.filter((e) => !e.exiting));
@@ -76,7 +104,32 @@ export function MatchmakerHub({
     return () => {
       if (timer) window.clearTimeout(timer);
     };
-  }, [hub.runningBattles]);
+  }, [runningList]);
+
+  const hasTimedOpenBattle = useMemo(
+    () =>
+      openList.some(
+        (room) => !room.isDemo && room.status === 'waiting' && room.players.length === 1
+      ),
+    [openList]
+  );
+
+  useEffect(() => {
+    if (!hasTimedOpenBattle) return;
+    setNowTick(Date.now());
+    const id = window.setInterval(() => {
+      const nextNow = Date.now();
+      setNowTick(nextNow);
+      const anyExpired = openList.some((room) => {
+        const rem = getOpenBattleRemainingMs(room, nextNow);
+        return rem !== null && rem <= 0;
+      });
+      if (anyExpired && onRefreshHub) {
+        onRefreshHub();
+      }
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [hasTimedOpenBattle, onRefreshHub, openList]);
 
   const handleCreateSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -159,7 +212,7 @@ export function MatchmakerHub({
               inputMode="numeric"
               min={10}
               max={100000}
-              step={1}
+              step={10}
               value={amountInput}
               onChange={(e) => {
                 setAmountInput(e.target.value);
@@ -234,22 +287,43 @@ export function MatchmakerHub({
                 openEntries.map(({ room: lobby, exiting }) => {
                   const host = lobby.players[0];
                   if (!host) return null;
+                  const opp = lobby.players[1] ?? null;
+                  const isJoinedBattle = Boolean(opp) && lobby.status !== 'completed';
                   const ownPlayerId = hostedRooms[lobby.code];
+                  const participantId = findParticipantPlayerId(
+                    lobby,
+                    combinedMyRooms,
+                    playerName
+                  );
+                  const isHostSide = participantId
+                    ? host.id === participantId
+                    : host.name.trim().toLowerCase() === playerName.trim().toLowerCase();
+                  const displayPartner = isJoinedBattle
+                    ? isHostSide
+                      ? opp
+                      : host
+                    : host;
                   const isBusy = busyCode === lobby.code;
+                  const remainingMs = ownPlayerId
+                    ? getOpenBattleRemainingMs(lobby, nowTick)
+                    : null;
 
                   return (
                     <div
                       key={lobby.code}
                       data-testid={`open-battle-${lobby.code}`}
+                      data-joined={isJoinedBattle ? 'true' : 'false'}
                       className={`w-full flex items-center justify-between gap-3 rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] px-4 py-3 text-white shadow-emerald-card ${
                         exiting ? 'animate-battle-out pointer-events-none' : 'animate-battle-in'
                       }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         <PlayerAvatar
-                          name={host.name}
+                          name={displayPartner?.name ?? host.name}
                           avatarId={
-                            ownPlayerId || host.name === playerName ? playerAvatarId : undefined
+                            !isJoinedBattle && (ownPlayerId || host.name === playerName)
+                              ? playerAvatarId
+                              : undefined
                           }
                           size="sm"
                         />
@@ -257,14 +331,29 @@ export function MatchmakerHub({
                           <p className="text-sm font-bold text-white tabular-nums">
                             Amount ₹{lobby.amount.toLocaleString('en-IN')}
                           </p>
-                          {ownPlayerId ? (
-                            <p className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-[#FCD34D] truncate">
+                          {isJoinedBattle && opp ? (
+                            <p className="mt-0.5 flex items-center gap-1.5 text-xs font-semibold text-[#FCD34D] truncate">
+                              <span
+                                className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#34D399] animate-pulse"
+                                aria-hidden="true"
+                              />
+                              <span className="truncate">
+                                {host.name} vs {opp.name}
+                              </span>
+                            </p>
+                          ) : ownPlayerId ? (
+                            <p className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-[#FCD34D] truncate tabular-nums">
                               <span
                                 data-testid="finding-player-spinner"
                                 className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-[#FCD34D]/35 border-t-[#FCD34D]"
                                 aria-hidden="true"
                               />
-                              <span>Finding player</span>
+                              <span>
+                                Finding player
+                                {remainingMs !== null
+                                  ? ` · ${formatCountdownMMSS(remainingMs)}`
+                                  : ''}
+                              </span>
                             </p>
                           ) : (
                             <p className="mt-0.5 text-xs text-white/80 truncate">
@@ -274,7 +363,22 @@ export function MatchmakerHub({
                         </div>
                       </div>
 
-                      {ownPlayerId ? (
+                      {isJoinedBattle ? (
+                        <button
+                          type="button"
+                          data-testid={`open-battle-action-${lobby.code}`}
+                          data-state="joined"
+                          onClick={() => onEnterBattle(lobby)}
+                          aria-label={`Start joined battle room for ₹${lobby.amount}`}
+                          className="inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-full bg-[#FCD34D] px-4 sm:px-5 py-1.5 text-xs font-bold text-[#16181D] shadow-pill-btn transition-colors hover:bg-[#FBBF24] whitespace-nowrap shrink-0"
+                        >
+                          <span
+                            className="h-2 w-2 rounded-full bg-[#064E3B] animate-pulse shrink-0"
+                            aria-hidden="true"
+                          />
+                          <span>Start</span>
+                        </button>
+                      ) : ownPlayerId ? (
                         <button
                           type="button"
                           disabled={isBusy}
@@ -288,6 +392,8 @@ export function MatchmakerHub({
                       ) : (
                         <button
                           type="button"
+                          data-testid={`open-battle-action-${lobby.code}`}
+                          data-state="open"
                           disabled={isBusy}
                           data-sound="none"
                           onClick={() => handleAcceptBattle(lobby.code)}

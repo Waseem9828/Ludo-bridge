@@ -50,8 +50,8 @@ export function GuideModal({ open, onClose }: GuideModalProps) {
             Once both friends are seated, the Host opens the Ludo King app, taps <strong>Play with Friends → Create</strong>, and pastes the 8-digit Room Code into Ludo league.online.
           </li>
           <li>
-            <strong className="text-[#16181D]">3. Copy Code &amp; Join in App:</strong>{' '}
-            Player 2 copies the code with one click, opens <strong>Play with Friends → Join</strong> in Ludo King, and both friends play the full game in the Ludo King app.
+            <strong className="text-[#16181D]">3. Copy Code &amp; Open Ludo King:</strong>{' '}
+            Once shared, both players can see the room code and tap <strong>Copy &amp; Open</strong> to copy the code and launch Ludo King directly into the room.
           </li>
           <li>
             <strong className="text-[#16181D]">4. Record Winner &amp; Rematch:</strong>{' '}

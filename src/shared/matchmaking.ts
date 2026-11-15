@@ -60,6 +60,8 @@ export interface MatchRoom {
   resultReport?: MatchResultReport | null;
   roundNumber: number;
   messages: ChatMessage[];
+  isDemo?: boolean;
+  entryFeeDeducted?: boolean;
 }
 
 export interface CompletedMatchRecord {
@@ -131,6 +133,9 @@ export function validatePlayerName(raw: string): {
   return { valid: true, value };
 }
 
+export const MAX_ACTIVE_BATTLES_PER_PLAYER = 3;
+export const OPEN_BATTLE_TTL_MS = 5 * 60 * 1000;
+
 export function validateBattleAmount(raw: string | number): {
   valid: boolean;
   value: number;
@@ -145,10 +150,164 @@ export function validateBattleAmount(raw: string | number): {
     return {
       valid: false,
       value: 0,
-      error: 'Enter a whole amount between 10 and 100,000.',
+      error: 'Enter a whole amount between ₹10 and ₹100,000.',
+    };
+  }
+  if (num % 10 !== 0) {
+    return {
+      valid: false,
+      value: 0,
+      error: 'Battle amount must be a multiple of ₹10 (e.g. 10, 20, 50, 100).',
     };
   }
   return { valid: true, value: num };
+}
+
+export function isPlayerInRoom(
+  room: Pick<MatchRoom, 'code' | 'players'>,
+  playerName: string,
+  myRoomPlayerIds?: Record<string, string>
+): boolean {
+  const mappedId = myRoomPlayerIds?.[room.code];
+  if (mappedId && room.players.some((p) => p.id === mappedId)) {
+    return true;
+  }
+  const normalized = playerName.trim().toLowerCase();
+  if (!normalized) return false;
+  return room.players.some((p) => p.name.trim().toLowerCase() === normalized);
+}
+
+export function countPlayerActiveBattles(
+  rooms: Iterable<Pick<MatchRoom, 'code' | 'status' | 'players'>>,
+  playerName: string,
+  myRoomPlayerIds?: Record<string, string>
+): number {
+  let count = 0;
+  for (const room of rooms) {
+    if (room.status === 'completed') continue;
+    if (isPlayerInRoom(room, playerName, myRoomPlayerIds)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+export function computeReservedOpenBalance(
+  rooms: Iterable<Pick<MatchRoom, 'code' | 'status' | 'players' | 'amount'>>,
+  playerName: string,
+  myRoomPlayerIds?: Record<string, string>
+): number {
+  let reserved = 0;
+  for (const room of rooms) {
+    if (room.status !== 'waiting' || room.players.length !== 1) continue;
+    if (isPlayerInRoom(room, playerName, myRoomPlayerIds)) {
+      reserved += Number.isFinite(room.amount) && room.amount > 0 ? room.amount : 0;
+    }
+  }
+  return reserved;
+}
+
+export function validateBattleEligibility(params: {
+  action: 'create' | 'join';
+  amount: number;
+  walletBalance: number;
+  rooms: Iterable<Pick<MatchRoom, 'code' | 'status' | 'players' | 'amount'>>;
+  playerName: string;
+  myRoomPlayerIds?: Record<string, string>;
+}): {
+  valid: boolean;
+  activeCount: number;
+  reservedBalance: number;
+  availableBalance: number;
+  error?: string;
+} {
+  const { action, amount, walletBalance, rooms, playerName, myRoomPlayerIds } =
+    params;
+  const roomList = Array.from(rooms);
+  const activeCount = countPlayerActiveBattles(roomList, playerName, myRoomPlayerIds);
+  const reservedBalance = computeReservedOpenBalance(
+    roomList,
+    playerName,
+    myRoomPlayerIds
+  );
+  const availableBalance = Math.max(0, walletBalance - reservedBalance);
+
+  if (activeCount >= MAX_ACTIVE_BATTLES_PER_PLAYER) {
+    return {
+      valid: false,
+      activeCount,
+      reservedBalance,
+      availableBalance,
+      error:
+        action === 'create'
+          ? `You can keep at most ${MAX_ACTIVE_BATTLES_PER_PLAYER} open/active battles at a time.`
+          : `You already have ${MAX_ACTIVE_BATTLES_PER_PLAYER} active battles. Finish or cancel one before joining another.`,
+    };
+  }
+
+  if (amount > availableBalance) {
+    return {
+      valid: false,
+      activeCount,
+      reservedBalance,
+      availableBalance,
+      error:
+        reservedBalance > 0
+          ? `Insufficient wallet balance. Available ₹${availableBalance.toLocaleString('en-IN')} after ₹${reservedBalance.toLocaleString('en-IN')} reserved for your open battles.`
+          : `Insufficient wallet balance. You need ₹${amount.toLocaleString('en-IN')} in your wallet to ${action} this battle.`,
+    };
+  }
+
+  return {
+    valid: true,
+    activeCount,
+    reservedBalance,
+    availableBalance,
+  };
+}
+
+export function expireStaleOpenBattles(
+  rooms: Record<string, MatchRoom>,
+  nowMs = Date.now(),
+  ttlMs = OPEN_BATTLE_TTL_MS
+): string[] {
+  const expiredCodes: string[] = [];
+  for (const [code, room] of Object.entries(rooms)) {
+    if (room.isDemo || room.players[0]?.id?.startsWith('mock-')) continue;
+    if (room.status !== 'waiting' || room.players.length !== 1) continue;
+    const createdMs = Date.parse(room.createdAt);
+    if (!Number.isFinite(createdMs)) continue;
+    if (nowMs - createdMs >= ttlMs) {
+      delete rooms[code];
+      expiredCodes.push(code);
+    }
+  }
+  return expiredCodes;
+}
+
+export function getOpenBattleRemainingMs(
+  room: Pick<MatchRoom, 'createdAt' | 'status' | 'players' | 'isDemo'>,
+  nowMs = Date.now(),
+  ttlMs = OPEN_BATTLE_TTL_MS
+): number | null {
+  if (
+    room.isDemo ||
+    room.players[0]?.id?.startsWith('mock-') ||
+    room.status !== 'waiting' ||
+    room.players.length !== 1
+  ) {
+    return null;
+  }
+  const createdMs = Date.parse(room.createdAt);
+  if (!Number.isFinite(createdMs)) return null;
+  return Math.max(0, ttlMs - (nowMs - createdMs));
+}
+
+export function formatCountdownMMSS(ms: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
 }
 
 export interface WalletTransaction {
@@ -255,6 +414,19 @@ export function formatLudoKingCode(code: string): string {
     return `${code.slice(0, 3)} ${code.slice(3)}`;
   }
   return code;
+}
+
+export function buildLudoKingDeepLink(roomCode: string): string {
+  const cleanCode = String(roomCode ?? '').trim().replace(/[\s-]+/g, '');
+  return `https://lk.gggred.com/?rmc=${encodeURIComponent(cleanCode)}&gt=0&po=0`;
+}
+
+export function canPlayerShareLudoCode(
+  room: Pick<MatchRoom, 'players'>,
+  playerId: string
+): boolean {
+  const player = room.players.find((p) => p.id === playerId);
+  return Boolean(player?.isHost);
 }
 
 export type HistoryFilter = 'games' | 'deposit' | 'withdrawal' | 'referral';
@@ -400,6 +572,50 @@ export function mergeAnimatedBattles(
   });
 
   return { entries, removedCodes };
+}
+
+export function findParticipantPlayerId(
+  room: Pick<MatchRoom, 'code' | 'players'>,
+  myRoomPlayerIds: Record<string, string>,
+  playerName: string
+): string | null {
+  const mappedId = myRoomPlayerIds[room.code];
+  if (mappedId && room.players.some((p) => p.id === mappedId)) {
+    return mappedId;
+  }
+  const normalized = playerName.trim().toLowerCase();
+  if (!normalized) return null;
+  const matched = room.players.find(
+    (p) => p.name.trim().toLowerCase() === normalized
+  );
+  return matched ? matched.id : null;
+}
+
+export function partitionLobbyBattles(params: {
+  openLobbies: MatchRoom[];
+  runningBattles: MatchRoom[];
+  myRoomPlayerIds: Record<string, string>;
+  playerName: string;
+}): {
+  openList: MatchRoom[];
+  runningList: MatchRoom[];
+} {
+  const { openLobbies, runningBattles, myRoomPlayerIds, playerName } = params;
+
+  const myJoinedBattles = runningBattles
+    .filter((room) =>
+      Boolean(findParticipantPlayerId(room, myRoomPlayerIds, playerName))
+    )
+    .slice()
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+  const pinnedCodes = new Set(myJoinedBattles.map((r) => r.code));
+  const waitingOpen = openLobbies.filter((room) => !pinnedCodes.has(room.code));
+
+  return {
+    openList: [...myJoinedBattles, ...waitingOpen],
+    runningList: runningBattles.filter((room) => !pinnedCodes.has(room.code)),
+  };
 }
 
 export const CANCEL_JOIN_REASONS = [
@@ -1013,3 +1229,55 @@ export function computePersonalMatchSummary(
   };
 }
 
+export interface MatchPenaltyRule {
+  id: string;
+  title: string;
+  description: string;
+  penaltyAmount: number;
+  penaltyLabel: string;
+}
+
+export const MATCH_PENALTY_RULES: MatchPenaltyRule[] = [
+  {
+    id: 'wrong-result',
+    title: 'Wrong Result Update',
+    description: 'Claiming a false win/loss or submitting an edited or invalid screenshot.',
+    penaltyAmount: 100,
+    penaltyLabel: '₹100 Penalty',
+  },
+  {
+    id: 'abuse',
+    title: 'Abuse or Misbehavior',
+    description: 'Using abusive language, threats, or harassing your opponent.',
+    penaltyAmount: 100,
+    penaltyLabel: '₹100 Penalty',
+  },
+  {
+    id: 'abandon-after-code',
+    title: 'Leaving After Room Code Share',
+    description: 'Abandoning or refusing to play once the Ludo King room code is shared.',
+    penaltyAmount: 50,
+    penaltyLabel: '₹50 Penalty',
+  },
+  {
+    id: 'wrong-room-code',
+    title: 'Wrong / Invalid Room Code',
+    description: 'Sharing a fake, expired, or 4-player code instead of 1v1 Classic.',
+    penaltyAmount: 50,
+    penaltyLabel: '₹50 Penalty',
+  },
+  {
+    id: 'match-stalling',
+    title: 'Match Stalling & Delay',
+    description: 'Intentionally delaying room creation, joining, or result confirmation.',
+    penaltyAmount: 50,
+    penaltyLabel: '₹50 Penalty',
+  },
+  {
+    id: 'fraud-collusion',
+    title: 'Fraud / Multi-Account Collusion',
+    description: 'Using duplicate accounts, win-trading, or tampering with match proof.',
+    penaltyAmount: 250,
+    penaltyLabel: '₹250 + Ban',
+  },
+];

@@ -50,6 +50,7 @@ export function createInitialMockStore(now = Date.now()): StoreState {
     winnerId: null,
     winnerName: null,
     roundNumber: 1,
+    isDemo: true,
     messages: [
       {
         id: `msg-${code.toLowerCase()}`,

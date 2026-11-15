@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminPanelPage } from './components/AdminPanelPage';
 import {
   confirmMatchResult,
@@ -35,8 +35,10 @@ import { useMatchmakingSocket } from './hooks/useMatchmakingSocket';
 import {
   AVATAR_IDS,
   createPersonalMatchRecordFromRoom,
+  findParticipantPlayerId,
   isValidAvatarId,
   normalizeLobbyCode,
+  validateBattleEligibility,
   type AvatarId,
   type CompletedMatchRecord,
   type HubSnapshot,
@@ -59,6 +61,8 @@ const PLAYER_NAME_KEY = 'ludobridge.playerName';
 const PLAYER_AVATAR_KEY = 'ludobridge.avatarId';
 const ACTIVE_SESSION_KEY = 'ludobridge.activeSession';
 const HOSTED_ROOMS_KEY = 'ludobridge.hostedRooms';
+const MY_ROOMS_KEY = 'ludobridge.myRooms';
+const DEDUCTED_FEES_KEY = 'ludobridge.deductedFees';
 const WALLET_KEY = 'ludobridge.wallet';
 const PERSONAL_MATCHES_KEY = 'ludobridge.personalMatches';
 const NOTIFICATION_READ_KEY = 'ludobridge.readNotifications';
@@ -206,6 +210,49 @@ function writeHostedRooms(map: Record<string, string>): void {
   }
 }
 
+function readMyRooms(): Record<string, string> {
+  try {
+    const raw = window.localStorage.getItem(MY_ROOMS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeMyRooms(map: Record<string, string>): void {
+  try {
+    window.localStorage.setItem(MY_ROOMS_KEY, JSON.stringify(map));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function readDeductedFees(): string[] {
+  try {
+    const raw = window.localStorage.getItem(DEDUCTED_FEES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeDeductedFees(codes: string[]): void {
+  try {
+    window.localStorage.setItem(
+      DEDUCTED_FEES_KEY,
+      JSON.stringify(codes.slice(-100))
+    );
+  } catch {
+    // ignore storage errors
+  }
+}
+
 interface StoredWallet {
   balance: number;
   transactions: WalletTransaction[];
@@ -334,6 +381,10 @@ export default function App() {
   const [hostedRooms, setHostedRooms] = useState<Record<string, string>>(() =>
     readHostedRooms()
   );
+  const [myRooms, setMyRooms] = useState<Record<string, string>>(() =>
+    readMyRooms()
+  );
+  const deductedFeesRef = useRef<Set<string>>(new Set(readDeductedFees()));
   const [hub, setHub] = useState<HubSnapshot>({
     openLobbies: [],
     runningBattles: [],
@@ -418,11 +469,36 @@ export default function App() {
     []
   );
 
+  const deductEntryFeeOnce = useCallback(
+    (room: Pick<MatchRoomType, 'code' | 'amount'>) => {
+      if (deductedFeesRef.current.has(room.code)) return;
+      deductedFeesRef.current.add(room.code);
+      writeDeductedFees(Array.from(deductedFeesRef.current));
+      handleWalletTransaction({
+        type: 'withdraw',
+        amount: room.amount,
+        note: `Battle Entry Fee (#${room.code})`,
+      });
+    },
+    [handleWalletTransaction]
+  );
+
   const updateHostedRooms = useCallback(
     (updater: (prev: Record<string, string>) => Record<string, string>) => {
       setHostedRooms((prev) => {
         const next = updater(prev);
         writeHostedRooms(next);
+        return next;
+      });
+    },
+    []
+  );
+
+  const updateMyRooms = useCallback(
+    (updater: (prev: Record<string, string>) => Record<string, string>) => {
+      setMyRooms((prev) => {
+        const next = updater(prev);
+        writeMyRooms(next);
         return next;
       });
     },
@@ -442,22 +518,7 @@ export default function App() {
   }, []);
 
   const navigateToRoute = useCallback(
-    async (target: Exclude<AppViewRoute, 'room'>) => {
-      if (activeRoom && activePlayerId) {
-        const leavingCode = activeRoom.code;
-        updateHostedRooms((prev) => {
-          if (!prev[leavingCode]) return prev;
-          const next = { ...prev };
-          delete next[leavingCode];
-          return next;
-        });
-        try {
-          await leaveLobby(leavingCode, activePlayerId);
-        } catch {
-          // leave locally even if expired
-        }
-        writeStoredSession(null);
-      }
+    (target: Exclude<AppViewRoute, 'room'>) => {
       setActiveRoom(null);
       setActivePlayerId(null);
       setView(target);
@@ -465,7 +526,7 @@ export default function App() {
       playSound('lobbyTransition');
       navigatePath(ROUTE_TO_PATH[target]);
     },
-    [activePlayerId, activeRoom, navigatePath, updateHostedRooms]
+    [navigatePath]
   );
 
   const navigateHome = useCallback(() => {
@@ -496,15 +557,13 @@ export default function App() {
         playSound('lobbyEnter');
       }
       writeStoredSession({ roomCode: room.code, playerId });
-      updateHostedRooms((prev) => {
-        if (!prev[room.code]) return prev;
-        const copy = { ...prev };
-        delete copy[room.code];
-        return copy;
-      });
+      updateMyRooms((prev) => ({
+        ...prev,
+        [room.code]: playerId,
+      }));
       navigatePath(`/room/${room.code}`, replace);
     },
-    [navigatePath, updateHostedRooms]
+    [navigatePath, updateMyRooms]
   );
 
   const exitRoomToLobby = useCallback(
@@ -644,57 +703,87 @@ export default function App() {
     });
   }, [activePlayerId, activeRoom]);
 
-  // Automatically enter /room/:code for the host when Player 2 accepts their Open Battle
+  // Deduct entry fee from Host's wallet only when an opponent joins their battle
   useEffect(() => {
-    if (view === 'room' || activeRoom || restoringRoom) return;
-    const hostedEntries = Object.entries(hostedRooms);
-    if (hostedEntries.length === 0) return;
-
-    for (const [code, hostPlayerId] of hostedEntries) {
-      const matchedRunning = hub.runningBattles.find((b) => b.code === code);
-      if (matchedRunning) {
-        const seat = matchedRunning.players.find((p) => p.id === hostPlayerId);
-        if (seat) {
-          enterRoom(matchedRunning, seat.id);
-          return;
-        }
+    const ownedCodes = { ...myRooms, ...hostedRooms };
+    for (const battle of hub.runningBattles) {
+      if (battle.players.length < 2 || battle.status === 'completed') continue;
+      if (ownedCodes[battle.code] && !deductedFeesRef.current.has(battle.code)) {
+        deductEntryFeeOnce(battle);
       }
     }
-
-    if (!loadingHub) {
-      const activeCodes = new Set([
-        ...hub.openLobbies.map((l) => l.code),
-        ...hub.runningBattles.map((b) => b.code),
-      ]);
-      const staleCodes = hostedEntries
-        .map(([code]) => code)
-        .filter((code) => !activeCodes.has(code));
-      if (staleCodes.length > 0) {
-        updateHostedRooms((prev) => {
-          const next = { ...prev };
-          for (const code of staleCodes) {
-            delete next[code];
-          }
-          return next;
-        });
-      }
+    if (
+      activeRoom &&
+      activePlayerId &&
+      activeRoom.players.length >= 2 &&
+      activeRoom.status !== 'completed' &&
+      ownedCodes[activeRoom.code] &&
+      !deductedFeesRef.current.has(activeRoom.code)
+    ) {
+      deductEntryFeeOnce(activeRoom);
     }
   }, [
+    activePlayerId,
     activeRoom,
-    enterRoom,
+    deductEntryFeeOnce,
+    hostedRooms,
+    hub.runningBattles,
+    myRooms,
+  ]);
+
+  // Clean up stale hosted/joined room references once rooms complete or close
+  useEffect(() => {
+    if (loadingHub) return;
+    const activeCodes = new Set([
+      ...hub.openLobbies.map((l) => l.code),
+      ...hub.runningBattles.map((b) => b.code),
+    ]);
+
+    const staleHosted = Object.keys(hostedRooms).filter(
+      (code) => !activeCodes.has(code)
+    );
+    if (staleHosted.length > 0) {
+      updateHostedRooms((prev) => {
+        const next = { ...prev };
+        for (const code of staleHosted) {
+          delete next[code];
+        }
+        return next;
+      });
+    }
+
+    const staleMy = Object.keys(myRooms).filter(
+      (code) => !activeCodes.has(code)
+    );
+    if (staleMy.length > 0) {
+      updateMyRooms((prev) => {
+        const next = { ...prev };
+        for (const code of staleMy) {
+          delete next[code];
+        }
+        return next;
+      });
+    }
+  }, [
     hostedRooms,
     hub.openLobbies,
     hub.runningBattles,
     loadingHub,
-    restoringRoom,
+    myRooms,
     updateHostedRooms,
-    view,
+    updateMyRooms,
   ]);
 
   const handleLeaveRoom = async (reason?: string) => {
     if (activeRoom && activePlayerId) {
       const leavingCode = activeRoom.code;
       updateHostedRooms((prev) => {
+        if (!prev[leavingCode]) return prev;
+        const next = { ...prev };
+        delete next[leavingCode];
+        return next;
+      });
+      updateMyRooms((prev) => {
         if (!prev[leavingCode]) return prev;
         const next = { ...prev };
         delete next[leavingCode];
@@ -713,6 +802,22 @@ export default function App() {
   };
 
   const handleCreateBattle = async (amount: number) => {
+    const combinedRooms = new Map<string, MatchRoomType>();
+    for (const r of [...hub.openLobbies, ...hub.runningBattles]) {
+      combinedRooms.set(r.code, r);
+    }
+    const eligibility = validateBattleEligibility({
+      action: 'create',
+      amount,
+      walletBalance: wallet.balance,
+      rooms: combinedRooms.values(),
+      playerName,
+      myRoomPlayerIds: { ...myRooms, ...hostedRooms },
+    });
+    if (!eligibility.valid) {
+      throw new Error(eligibility.error);
+    }
+
     const { room, playerId } = await createLobby({
       amount,
       playerName,
@@ -723,17 +828,75 @@ export default function App() {
       ...prev,
       [room.code]: playerId,
     }));
+    updateMyRooms((prev) => ({
+      ...prev,
+      [room.code]: playerId,
+    }));
     playSound('matchCreated');
     fetchHubSnapshot().then(setHub).catch(() => {});
   };
 
   const handleJoinLobby = async (code: string) => {
+    const targetRoom =
+      hub.openLobbies.find((r) => r.code === code) ??
+      (await fetchRoom(code)).room;
+    const combinedRooms = new Map<string, MatchRoomType>();
+    for (const r of [...hub.openLobbies, ...hub.runningBattles]) {
+      combinedRooms.set(r.code, r);
+    }
+    const eligibility = validateBattleEligibility({
+      action: 'join',
+      amount: targetRoom.amount,
+      walletBalance: wallet.balance,
+      rooms: combinedRooms.values(),
+      playerName,
+      myRoomPlayerIds: { ...myRooms, ...hostedRooms },
+    });
+    if (!eligibility.valid) {
+      throw new Error(eligibility.error);
+    }
+
     const { room, playerId } = await joinLobby(code, playerName);
-    enterRoom(room, playerId);
+    deductEntryFeeOnce(room);
+    updateMyRooms((prev) => ({
+      ...prev,
+      [room.code]: playerId,
+    }));
+    writeStoredSession({ roomCode: room.code, playerId });
+    playSound('lobbyEnter');
+    setHub((prev) => ({
+      ...prev,
+      openLobbies: prev.openLobbies.filter((r) => r.code !== room.code),
+      runningBattles: [
+        room,
+        ...prev.runningBattles.filter((r) => r.code !== room.code),
+      ],
+    }));
+    fetchHubSnapshot().then(setHub).catch(() => {});
   };
+
+  const handleEnterJoinedBattle = useCallback(
+    (room: MatchRoomType) => {
+      const pid =
+        findParticipantPlayerId(
+          room,
+          { ...myRooms, ...hostedRooms },
+          playerName
+        ) ?? room.players[0]?.id;
+      if (!pid) return;
+      enterRoom(room, pid);
+    },
+    [enterRoom, hostedRooms, myRooms, playerName]
+  );
 
   const handleDeleteLobby = async (code: string, playerId: string) => {
     updateHostedRooms((prev) => {
+      if (!prev[code]) return prev;
+      const next = { ...prev };
+      delete next[code];
+      return next;
+    });
+    updateMyRooms((prev) => {
       if (!prev[code]) return prev;
       const next = { ...prev };
       delete next[code];
@@ -810,7 +973,7 @@ export default function App() {
         onOpenSidebar={() => setSidebarOpen(true)}
         onNavigateHome={navigateHome}
         onNavigateWallet={() => navigateToRoute('wallet')}
-        onLeaveRoom={handleLeaveRoom}
+        onLeaveRoom={navigateHome}
         onOpenGuide={() => setGuideOpen(true)}
         onOpenNotifications={() => setNotificationsOpen(true)}
       />
@@ -897,11 +1060,16 @@ export default function App() {
             hub={hub}
             loadingHub={loadingHub}
             hostedRooms={hostedRooms}
+            myRooms={myRooms}
             playerName={playerName}
             playerAvatarId={avatarId}
             onCreateBattle={handleCreateBattle}
             onJoinLobby={handleJoinLobby}
             onDeleteLobby={handleDeleteLobby}
+            onEnterBattle={handleEnterJoinedBattle}
+            onRefreshHub={() => {
+              fetchHubSnapshot().then(setHub).catch(() => {});
+            }}
           />
         ) : view === 'wallet' ? (
           <WalletPage

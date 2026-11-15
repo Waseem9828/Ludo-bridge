@@ -2,7 +2,10 @@ import {
   applyRematchReset,
   applyResultConfirmation,
   computeMatchStatus,
+  countPlayerActiveBattles,
   createInitialResultReport,
+  expireStaleOpenBattles,
+  MAX_ACTIVE_BATTLES_PER_PLAYER,
   normalizeLobbyCode,
   pickOpponentColor,
   validateBattleAmount,
@@ -107,6 +110,9 @@ async function requestJsonWithFallback<T>(
 export function fetchHubSnapshot(): Promise<HubSnapshot> {
   return requestJsonWithFallback<HubSnapshot>('/api/lobbies', undefined, () => {
     const store = readLocalStore();
+    if (expireStaleOpenBattles(store.rooms, Date.now()).length > 0) {
+      writeLocalStore(store);
+    }
     return buildHubSnapshotFromStore(store);
   });
 }
@@ -118,6 +124,9 @@ export function fetchRoom(code: string): Promise<{ room: MatchRoom }> {
     undefined,
     () => {
       const store = readLocalStore();
+      if (expireStaleOpenBattles(store.rooms, Date.now()).length > 0) {
+        writeLocalStore(store);
+      }
       const room = store.rooms[norm];
       if (!room) {
         throw new Error(`Lobby ${norm || 'unknown'} was not found.`);
@@ -144,11 +153,22 @@ export function createLobby(params: {
     },
     () => {
       const store = readLocalStore();
+      if (expireStaleOpenBattles(store.rooms, Date.now()).length > 0) {
+        writeLocalStore(store);
+      }
       const rawName = String(params.playerName ?? '').trim();
       const nameCheck = rawName
         ? validatePlayerName(rawName)
         : { valid: true, value: `Player ${Math.floor(100 + Math.random() * 900)}` };
       if (!nameCheck.valid) throw new Error(nameCheck.error);
+      if (
+        countPlayerActiveBattles(Object.values(store.rooms), nameCheck.value) >=
+        MAX_ACTIVE_BATTLES_PER_PLAYER
+      ) {
+        throw new Error(
+          `You can keep at most ${MAX_ACTIVE_BATTLES_PER_PLAYER} open/active battles at a time.`
+        );
+      }
       const amountCheck = validateBattleAmount(params.amount);
       if (!amountCheck.valid) throw new Error(amountCheck.error);
 
@@ -239,10 +259,21 @@ export function joinLobby(
     },
     () => {
       const store = readLocalStore();
+      if (expireStaleOpenBattles(store.rooms, Date.now()).length > 0) {
+        writeLocalStore(store);
+      }
       const room = store.rooms[norm];
-      if (!room) throw new Error(`No lobby found for code ${norm || 'entered'}.`);
+      if (!room) throw new Error(`No active battle found for code ${norm || 'entered'}.`);
       const nameCheck = validatePlayerName(playerName);
       if (!nameCheck.valid) throw new Error(nameCheck.error);
+      if (
+        countPlayerActiveBattles(Object.values(store.rooms), nameCheck.value) >=
+        MAX_ACTIVE_BATTLES_PER_PLAYER
+      ) {
+        throw new Error(
+          `You already have ${MAX_ACTIVE_BATTLES_PER_PLAYER} active battles. Finish or cancel one before joining another.`
+        );
+      }
       if (room.players.length >= 2) {
         throw new Error('This 2-player match room is already full.');
       }
@@ -259,6 +290,7 @@ export function joinLobby(
         connected: true,
         joinedAt: now,
       });
+      room.entryFeeDeducted = true;
       room.updatedAt = now;
       room.status = computeMatchStatus(room);
       room.messages.push({
@@ -293,6 +325,7 @@ export function submitLudoKingCode(
       if (!room) throw new Error('Match room not found.');
       const sender = room.players.find((p) => p.id === playerId);
       if (!sender) throw new Error('Only seated players can update the Ludo King code.');
+      if (!sender.isHost) throw new Error('Only the host can share the Ludo King room code.');
       const codeCheck = validateLudoKingCode(ludoKingRoomCode);
       if (!codeCheck.valid) throw new Error(codeCheck.error);
       const now = new Date().toISOString();

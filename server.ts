@@ -8,7 +8,10 @@ import {
   applyRematchReset,
   applyResultConfirmation,
   computeMatchStatus,
+  countPlayerActiveBattles,
   createInitialResultReport,
+  expireStaleOpenBattles,
+  MAX_ACTIVE_BATTLES_PER_PLAYER,
   normalizeLobbyCode,
   pickOpponentColor,
   validateBattleAmount,
@@ -111,6 +114,18 @@ function createId(prefix: string): string {
 
 function buildHubSnapshot(): HubSnapshot {
   return buildHubSnapshotFromStore(store);
+}
+
+function pruneExpiredOpenBattles(): string[] {
+  const expired = expireStaleOpenBattles(store.rooms, Date.now());
+  if (expired.length > 0) {
+    persistStore();
+    for (const code of expired) {
+      broadcastRoomClosed(code);
+    }
+    broadcastHub();
+  }
+  return expired;
 }
 
 function getAdminStore(): AdminStoreState {
@@ -244,16 +259,29 @@ async function startServer() {
   });
 
   app.get('/api/lobbies', (_req, res) => {
+    pruneExpiredOpenBattles();
     res.json(buildHubSnapshot());
   });
 
   app.post('/api/lobbies', (req, res) => {
+    pruneExpiredOpenBattles();
     const rawName = String(req.body?.playerName ?? '').trim();
     const nameCheck = rawName
       ? validatePlayerName(rawName)
       : { valid: true, value: `Player ${crypto.randomInt(100, 999)}` };
     if (!nameCheck.valid) {
       res.status(400).json({ error: nameCheck.error });
+      return;
+    }
+
+    const activeCount = countPlayerActiveBattles(
+      Object.values(store.rooms),
+      nameCheck.value
+    );
+    if (activeCount >= MAX_ACTIVE_BATTLES_PER_PLAYER) {
+      res.status(400).json({
+        error: `You can keep at most ${MAX_ACTIVE_BATTLES_PER_PLAYER} open/active battles at a time.`,
+      });
       return;
     }
 
@@ -432,16 +460,28 @@ async function startServer() {
   });
 
   app.post('/api/lobbies/:code/join', (req, res) => {
+    pruneExpiredOpenBattles();
     const code = normalizeLobbyCode(req.params.code);
     const room = store.rooms[code];
     if (!room) {
-      res.status(404).json({ error: `No lobby found for code ${code || 'entered'}.` });
+      res.status(404).json({ error: `No active battle found for code ${code || 'entered'} (it may have expired).` });
       return;
     }
 
     const nameCheck = validatePlayerName(String(req.body?.playerName ?? ''));
     if (!nameCheck.valid) {
       res.status(400).json({ error: nameCheck.error });
+      return;
+    }
+
+    const activeCount = countPlayerActiveBattles(
+      Object.values(store.rooms),
+      nameCheck.value
+    );
+    if (activeCount >= MAX_ACTIVE_BATTLES_PER_PLAYER) {
+      res.status(400).json({
+        error: `You already have ${MAX_ACTIVE_BATTLES_PER_PLAYER} active battles. Finish or cancel one before joining another.`,
+      });
       return;
     }
 
@@ -463,6 +503,7 @@ async function startServer() {
       connected: false,
       joinedAt: now,
     });
+    room.entryFeeDeducted = true;
     room.updatedAt = now;
     room.status = computeMatchStatus(room);
     room.messages.push({
@@ -492,6 +533,10 @@ async function startServer() {
     const sender = room.players.find((p) => p.id === playerId);
     if (!sender) {
       res.status(403).json({ error: 'Only seated players can update the Ludo King code.' });
+      return;
+    }
+    if (!sender.isHost) {
+      res.status(403).json({ error: 'Only the host can share the Ludo King room code.' });
       return;
     }
 
@@ -1228,10 +1273,20 @@ async function startServer() {
     res.json(buildAdminSnapshot());
   });
 
+  const httpServer = http.createServer(app);
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+        allowedHosts: true,
+        ws: {
+          server: httpServer,
+          path: '/vite-hmr',
+        },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -1243,8 +1298,20 @@ async function startServer() {
     });
   }
 
-  const httpServer = http.createServer(app);
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  const wss = new WebSocketServer({ noServer: true });
+
+  httpServer.on('upgrade', (req, socket, head) => {
+    try {
+      const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+      if (pathname === '/ws') {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          wss.emit('connection', ws, req);
+        });
+      }
+    } catch {
+      socket.destroy();
+    }
+  });
 
   wss.on('connection', (ws) => {
     const meta: ClientMeta = {
@@ -1301,6 +1368,11 @@ async function startServer() {
       }
     });
   });
+
+  const expiryInterval = setInterval(() => {
+    pruneExpiredOpenBattles();
+  }, 10_000);
+  expiryInterval.unref();
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Ludo league.online server running at http://localhost:${PORT}`);

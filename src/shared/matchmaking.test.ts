@@ -4,26 +4,38 @@ import {
   applyRematchReset,
   applyResultConfirmation,
   AVATAR_IDS,
+  buildLudoKingDeepLink,
   buildPlayerReferralCode,
+  canPlayerShareLudoCode,
   CANCEL_JOIN_REASONS,
   computeMatchStatus,
   computePersonalMatchSummary,
   computeReferralSummary,
+  computeReservedOpenBalance,
+  countPlayerActiveBattles,
   createInitialResultReport,
   createPersonalMatchRecordFromRoom,
+  expireStaleOpenBattles,
   filterPersonalMatchHistory,
   filterWalletTransactions,
+  findParticipantPlayerId,
+  formatCountdownMMSS,
   formatLudoKingCode,
   getAvatarIdForName,
   getMockLeaderboardData,
   getMockReferralHistory,
+  getOpenBattleRemainingMs,
   getResultConfirmationState,
   isValidAvatarId,
+  MAX_ACTIVE_BATTLES_PER_PLAYER,
   mergeAnimatedBattles,
   normalizeLobbyCode,
+  OPEN_BATTLE_TTL_MS,
+  partitionLobbyBattles,
   pickOpponentColor,
   sumBattleAmounts,
   validateBattleAmount,
+  validateBattleEligibility,
   validateCancelReason,
   validateLudoKingCode,
   validatePlayerName,
@@ -57,11 +69,131 @@ test('validatePlayerName enforces length and trims whitespace', () => {
   assert.equal(validatePlayerName('X'.repeat(25)).valid, false);
 });
 
-test('validateBattleAmount validates positive integer bounds', () => {
+test('validateBattleAmount enforces integer bounds and multiples of 10', () => {
   assert.equal(validateBattleAmount('').valid, false);
   assert.equal(validateBattleAmount('5').valid, false);
   assert.equal(validateBattleAmount('10.5').valid, false);
+  assert.equal(validateBattleAmount('15').valid, false);
+  assert.equal(validateBattleAmount('25').valid, false);
+  assert.equal(validateBattleAmount('105').valid, false);
+  assert.deepEqual(validateBattleAmount('10'), { valid: true, value: 10 });
+  assert.deepEqual(validateBattleAmount('20'), { valid: true, value: 20 });
   assert.deepEqual(validateBattleAmount('100'), { valid: true, value: 100 });
+  assert.deepEqual(validateBattleAmount('1250'), { valid: true, value: 1250 });
+});
+
+test('validateBattleEligibility enforces max 3 open/active battles and reserved wallet balance across multiple creates', () => {
+  const mkRoom = (code: string, amount: number, joined = false): MatchRoom => ({
+    code,
+    visibility: 'open',
+    mode: 'Classic',
+    amount,
+    stakesLabel: '100 Pts',
+    bestOf: 1,
+    createdAt: '2026-11-15T10:00:00.000Z',
+    updatedAt: '2026-11-15T10:00:00.000Z',
+    status: joined ? 'code_pending' : 'waiting',
+    ludoKingRoomCode: null,
+    players: joined
+      ? [
+          { id: `${code}-p1`, name: 'Vikram', color: 'Red', isHost: true, readyInApp: false, connected: true, joinedAt: '2026-11-15T10:00:00.000Z' },
+          { id: `${code}-p2`, name: 'Zoya', color: 'Yellow', isHost: false, readyInApp: false, connected: true, joinedAt: '2026-11-15T10:01:00.000Z' },
+        ]
+      : [
+          { id: `${code}-p1`, name: 'Vikram', color: 'Red', isHost: true, readyInApp: false, connected: true, joinedAt: '2026-11-15T10:00:00.000Z' },
+        ],
+    winnerId: null,
+    winnerName: null,
+    roundNumber: 1,
+    messages: [],
+  });
+
+  // 2 unjoined open battles (₹300 + ₹300 reserved = ₹600) with ₹700 balance -> only ₹100 available
+  const twoOpen = [mkRoom('B1', 300), mkRoom('B2', 300)];
+  assert.equal(countPlayerActiveBattles(twoOpen, 'Vikram'), 2);
+  assert.equal(computeReservedOpenBalance(twoOpen, 'Vikram'), 600);
+
+  const tooCostly = validateBattleEligibility({
+    action: 'create',
+    amount: 200,
+    walletBalance: 700,
+    rooms: twoOpen,
+    playerName: 'Vikram',
+  });
+  assert.equal(tooCostly.valid, false);
+  assert.equal(tooCostly.availableBalance, 100);
+
+  const withinBudget = validateBattleEligibility({
+    action: 'create',
+    amount: 100,
+    walletBalance: 700,
+    rooms: twoOpen,
+    playerName: 'Vikram',
+  });
+  assert.equal(withinBudget.valid, true);
+
+  // 3 active battles blocks creating OR joining a 4th battle
+  const threeActive = [mkRoom('B1', 100), mkRoom('B2', 100), mkRoom('B3', 100, true)];
+  assert.equal(countPlayerActiveBattles(threeActive, 'Vikram'), MAX_ACTIVE_BATTLES_PER_PLAYER);
+  assert.equal(
+    validateBattleEligibility({
+      action: 'create',
+      amount: 10,
+      walletBalance: 5000,
+      rooms: threeActive,
+      playerName: 'Vikram',
+    }).valid,
+    false
+  );
+  assert.equal(
+    validateBattleEligibility({
+      action: 'join',
+      amount: 10,
+      walletBalance: 5000,
+      rooms: threeActive,
+      playerName: 'Vikram',
+    }).valid,
+    false
+  );
+});
+
+test('expireStaleOpenBattles removes unjoined non-demo battles after 5 minutes while preserving joined and demo battles', () => {
+  const nowMs = Date.UTC(2026, 10, 15, 10, 10, 0);
+  const store = createInitialMockStore(nowMs - 10 * 60 * 1000);
+  // Add a fresh user-created battle (2 mins old) and an expired user-created battle (5m 1s old)
+  store.rooms['USER_OK'] = {
+    code: 'USER_OK',
+    visibility: 'open',
+    mode: 'Classic',
+    amount: 100,
+    stakesLabel: '100 Pts',
+    bestOf: 1,
+    createdAt: new Date(nowMs - 2 * 60 * 1000).toISOString(),
+    updatedAt: new Date(nowMs - 2 * 60 * 1000).toISOString(),
+    status: 'waiting',
+    ludoKingRoomCode: null,
+    players: [
+      { id: 'u1', name: 'Test1', color: 'Red', isHost: true, readyInApp: false, connected: true, joinedAt: new Date(nowMs - 2 * 60 * 1000).toISOString() },
+    ],
+    winnerId: null,
+    winnerName: null,
+    roundNumber: 1,
+    messages: [],
+  };
+  store.rooms['USER_EXP'] = {
+    ...store.rooms['USER_OK'],
+    code: 'USER_EXP',
+    createdAt: new Date(nowMs - OPEN_BATTLE_TTL_MS - 1000).toISOString(),
+    updatedAt: new Date(nowMs - OPEN_BATTLE_TTL_MS - 1000).toISOString(),
+  };
+
+  assert.equal(formatCountdownMMSS(getOpenBattleRemainingMs(store.rooms['USER_OK'], nowMs) ?? 0), '3:00');
+  const expired = expireStaleOpenBattles(store.rooms, nowMs);
+  assert.deepEqual(expired, ['USER_EXP']);
+  assert.ok(store.rooms['USER_OK']);
+  assert.equal(store.rooms['USER_EXP'], undefined);
+  // Demo lobbies remain available
+  assert.ok(store.rooms['CL050A']);
 });
 
 test('validateWalletTransaction validates deposit and withdrawal rules', () => {
@@ -103,6 +235,33 @@ test('validateLudoKingCode enforces 8 numeric digits starting with 0 and strips 
 test('formatLudoKingCode groups 8-digit and 6-digit codes clearly', () => {
   assert.equal(formatLudoKingCode('48291034'), '4829 1034');
   assert.equal(formatLudoKingCode('482910'), '482 910');
+});
+
+test('buildLudoKingDeepLink embeds clean 8-digit room code into rmc query parameter', () => {
+  assert.equal(
+    buildLudoKingDeepLink('01584958'),
+    'https://lk.gggred.com/?rmc=01584958&gt=0&po=0'
+  );
+  assert.equal(
+    buildLudoKingDeepLink(' 0158 4958 '),
+    'https://lk.gggred.com/?rmc=01584958&gt=0&po=0'
+  );
+  assert.equal(
+    buildLudoKingDeepLink('0158-4958'),
+    'https://lk.gggred.com/?rmc=01584958&gt=0&po=0'
+  );
+});
+
+test('canPlayerShareLudoCode permits only the host player to share room code', () => {
+  const store = createInitialMockStore(1_700_000_000_000);
+  const room = store.rooms['RN100Z'];
+  const host = room.players[0];
+  const opponent = room.players[1];
+  assert.equal(host.isHost, true);
+  assert.equal(opponent.isHost, false);
+  assert.equal(canPlayerShareLudoCode(room, host.id), true);
+  assert.equal(canPlayerShareLudoCode(room, opponent.id), false);
+  assert.equal(canPlayerShareLudoCode(room, 'non-existent'), false);
 });
 
 test('computeMatchStatus transitions accurately across lifecycle', () => {
@@ -293,6 +452,60 @@ test('mergeAnimatedBattles marks removed battles as exiting while keeping new on
   assert.equal(merged.entries[1].exiting, false);
   assert.equal(merged.entries[2].room.code, 'C3');
   assert.equal(merged.entries[2].exiting, false);
+});
+
+test('partitionLobbyBattles pins joined battle to top of Open Battles for both host and opponent without duplicating in Running Battles', () => {
+  const store = createInitialMockStore(1_700_000_000_000);
+  const snapshot = buildHubSnapshotFromStore(store);
+  const joinedBattle = snapshot.runningBattles[1]; // RN150X: Aarav (host) vs Zoya (opponent)
+  const hostId = joinedBattle.players[0].id;
+  const opponentId = joinedBattle.players[1].id;
+
+  // Host view via mapped playerId
+  const hostPartition = partitionLobbyBattles({
+    openLobbies: snapshot.openLobbies,
+    runningBattles: snapshot.runningBattles,
+    myRoomPlayerIds: { [joinedBattle.code]: hostId },
+    playerName: 'RandomHostAlias',
+  });
+  assert.equal(hostPartition.openList[0].code, joinedBattle.code);
+  assert.equal(
+    hostPartition.runningList.some((r) => r.code === joinedBattle.code),
+    false
+  );
+  assert.equal(
+    findParticipantPlayerId(joinedBattle, { [joinedBattle.code]: hostId }, 'RandomHostAlias'),
+    hostId
+  );
+
+  // Opponent view via mapped playerId
+  const opponentPartition = partitionLobbyBattles({
+    openLobbies: snapshot.openLobbies,
+    runningBattles: snapshot.runningBattles,
+    myRoomPlayerIds: { [joinedBattle.code]: opponentId },
+    playerName: 'OtherName',
+  });
+  assert.equal(opponentPartition.openList[0].code, joinedBattle.code);
+  assert.equal(
+    opponentPartition.runningList.some((r) => r.code === joinedBattle.code),
+    false
+  );
+
+  // Third-party bystander does not see joined battle pinned in Open Battles
+  const bystanderPartition = partitionLobbyBattles({
+    openLobbies: snapshot.openLobbies,
+    runningBattles: snapshot.runningBattles,
+    myRoomPlayerIds: {},
+    playerName: 'Spectator123',
+  });
+  assert.equal(
+    bystanderPartition.openList.some((r) => r.code === joinedBattle.code),
+    false
+  );
+  assert.equal(
+    bystanderPartition.runningList.some((r) => r.code === joinedBattle.code),
+    true
+  );
 });
 
 test('createInitialMockStore and buildHubSnapshotFromStore expose seeded battles and history', () => {
@@ -576,3 +789,15 @@ test('personal history helpers isolate current player games, deduplicate, and co
   });
 });
 
+test('MATCH_PENALTY_RULES covers wrong result, abuse, and extra fair-play penalties with valid amounts', async () => {
+  const { MATCH_PENALTY_RULES } = await import('./matchmaking');
+  assert.ok(MATCH_PENALTY_RULES.length >= 5);
+  assert.ok(MATCH_PENALTY_RULES.some((r) => r.id === 'wrong-result' && r.penaltyAmount === 100));
+  assert.ok(MATCH_PENALTY_RULES.some((r) => r.id === 'abuse' && r.penaltyAmount === 100));
+  for (const rule of MATCH_PENALTY_RULES) {
+    assert.ok(rule.title.trim().length > 0);
+    assert.ok(rule.description.trim().length > 0);
+    assert.ok(rule.penaltyAmount >= 10);
+    assert.ok(rule.penaltyLabel.includes('₹'));
+  }
+});
