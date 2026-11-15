@@ -143,7 +143,7 @@ export function createInitialMockStore(now = Date.now()): StoreState {
     makeRunningRoom(
       'RN100Z',
       100,
-      '39204815',
+      '03924815',
       { id: 'mock-sid', name: 'Siddharth', color: 'Red' },
       { id: 'mock-kavya', name: 'Kavya', color: 'Yellow' },
       290000,
@@ -152,7 +152,7 @@ export function createInitialMockStore(now = Date.now()): StoreState {
     makeRunningRoom(
       'RN150X',
       150,
-      '54921804',
+      '05491804',
       { id: 'mock-aarav', name: 'Aarav', color: 'Red' },
       { id: 'mock-zoya', name: 'Zoya', color: 'Yellow' },
       360000,
@@ -161,7 +161,7 @@ export function createInitialMockStore(now = Date.now()): StoreState {
     makeRunningRoom(
       'RN300K',
       300,
-      '84612093',
+      '08462093',
       { id: 'mock-dev', name: 'Dev', color: 'Green' },
       { id: 'mock-ishita', name: 'Ishita', color: 'Blue' },
       410000,
@@ -170,7 +170,7 @@ export function createInitialMockStore(now = Date.now()): StoreState {
     makeRunningRoom(
       'RN500Y',
       500,
-      '71843290',
+      '07183290',
       { id: 'mock-vikram', name: 'Vikram', color: 'Green' },
       { id: 'mock-neha', name: 'Neha', color: 'Blue' },
       480000,
@@ -179,7 +179,7 @@ export function createInitialMockStore(now = Date.now()): StoreState {
     makeRunningRoom(
       'RN1000',
       1000,
-      '20495718',
+      '02045718',
       { id: 'mock-rishi', name: 'Rishi', color: 'Red' },
       { id: 'mock-tanya', name: 'Tanya', color: 'Yellow' },
       540000,
@@ -188,7 +188,7 @@ export function createInitialMockStore(now = Date.now()): StoreState {
     makeRunningRoom(
       'RN2000',
       2000,
-      '66518342',
+      '06658342',
       { id: 'mock-karan', name: 'Karan', color: 'Blue' },
       { id: 'mock-pooja', name: 'Pooja', color: 'Green' },
       600000,

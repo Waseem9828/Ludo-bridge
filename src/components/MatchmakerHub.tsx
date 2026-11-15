@@ -2,12 +2,12 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowRight, Trash2 } from 'lucide-react';
 import {
   mergeAnimatedBattles,
-  sumBattleAmounts,
   validateBattleAmount,
   type AnimatedBattleEntry,
   type AvatarId,
   type HubSnapshot,
 } from '../shared/matchmaking';
+import { PageTitleHeading } from './PageTitleHeading';
 import { PlayerAvatar } from './PlayerAvatar';
 
 interface MatchmakerHubProps {
@@ -45,8 +45,6 @@ export function MatchmakerHub({
   );
 
   const amountInputRef = useRef<HTMLInputElement | null>(null);
-  const openTotalAmount = sumBattleAmounts(hub.openLobbies);
-  const runningTotalAmount = sumBattleAmounts(hub.runningBattles);
 
   useEffect(() => {
     let timer: number | undefined;
@@ -201,11 +199,11 @@ export function MatchmakerHub({
         </div>
       )}
 
-      {/* Full-Height Expanded Battles Container */}
+      {/* Full-Width Battles List (No Outer Green Container) */}
       <section
         aria-label="Battles"
         data-testid="battles-scroll-container"
-        className="flex-1 w-full flex flex-col rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] p-4 sm:p-5 text-white shadow-emerald-card"
+        className="flex-1 w-full flex flex-col"
       >
         <div
           data-testid="battles-scroll-area"
@@ -213,31 +211,22 @@ export function MatchmakerHub({
         >
           {/* Open Battles */}
           <div id="open-battles">
-            <div className="flex items-baseline justify-between gap-2">
-              <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight text-white">
-                Open Battles
-              </h2>
-              <span
-                data-testid="open-battles-summary"
-                className="text-xs font-medium text-white/80 tabular-nums whitespace-nowrap shrink-0"
-              >
-                {hub.openLobbies.length} waiting ·{' '}
-                <span className="font-bold text-[#FCD34D]">
-                  ₹{openTotalAmount.toLocaleString('en-IN')}
-                </span>
-              </span>
-            </div>
+            <PageTitleHeading
+              title="Open Battles"
+              as="h2"
+              testId="open-battles-divider"
+            />
 
-            <div className="mt-3 space-y-2.5 overflow-hidden">
+            <div className="mt-3 space-y-2.5">
               {loadingHub ? (
-                <div className="space-y-2" aria-busy="true" aria-label="Loading open battles">
-                  <div className="h-14 rounded-xl bg-white/10" />
-                  <div className="h-14 rounded-xl bg-white/10" />
+                <div className="space-y-2.5" aria-busy="true" aria-label="Loading open battles">
+                  <div className="h-[62px] w-full rounded-2xl bg-[#16181D]/8" />
+                  <div className="h-[62px] w-full rounded-2xl bg-[#16181D]/8" />
                 </div>
               ) : openEntries.length === 0 ? (
-                <div className="rounded-xl border border-white/15 bg-black/15 px-4 py-6 text-center">
-                  <p className="text-xs font-semibold text-white">No open battles waiting</p>
-                  <p className="mt-1 text-[11px] text-white/70">
+                <div className="w-full rounded-2xl border border-[#16181D]/10 bg-white px-4 py-6 text-center shadow-surface-card">
+                  <p className="text-xs font-semibold text-[#16181D]">No open battles waiting</p>
+                  <p className="mt-1 text-[11px] text-[#5A606D]">
                     Enter an amount above and click Set Battle to post a challenge.
                   </p>
                 </div>
@@ -252,7 +241,7 @@ export function MatchmakerHub({
                     <div
                       key={lobby.code}
                       data-testid={`open-battle-${lobby.code}`}
-                      className={`flex items-center justify-between gap-3 rounded-xl border border-white/15 bg-white/10 px-4 py-3 shadow-sm backdrop-blur-xs ${
+                      className={`w-full flex items-center justify-between gap-3 rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] px-4 py-3 text-white shadow-emerald-card ${
                         exiting ? 'animate-battle-out pointer-events-none' : 'animate-battle-in'
                       }`}
                     >
@@ -315,33 +304,21 @@ export function MatchmakerHub({
             </div>
           </div>
 
-          {/* Middle Divider */}
-          <hr className="border-white/20" />
+          {/* Running Battles Divider */}
+          <div id="running-battles" className="pt-1">
+            <PageTitleHeading
+              title="Running Battles"
+              as="h2"
+              testId="running-battles-divider"
+            />
 
-          {/* Running Battles */}
-          <div id="running-battles">
-            <div className="flex items-baseline justify-between gap-2">
-              <h2 className="font-display text-lg sm:text-xl font-bold tracking-tight text-white">
-                Running Battles
-              </h2>
-              <span
-                data-testid="running-battles-summary"
-                className="text-xs font-medium text-white/80 tabular-nums whitespace-nowrap shrink-0"
-              >
-                {hub.runningBattles.length} active ·{' '}
-                <span className="font-bold text-[#FCD34D]">
-                  ₹{runningTotalAmount.toLocaleString('en-IN')}
-                </span>
-              </span>
-            </div>
-
-            <div className="mt-3 space-y-2.5 overflow-hidden">
+            <div className="mt-3 space-y-2.5">
               {runningEntries.length === 0 ? (
-                <div className="rounded-xl border border-white/15 bg-black/15 px-4 py-6 text-center">
-                  <p className="text-xs font-semibold text-white">
+                <div className="w-full rounded-2xl border border-[#16181D]/10 bg-white px-4 py-6 text-center shadow-surface-card">
+                  <p className="text-xs font-semibold text-[#16181D]">
                     No running 2-player battles right now
                   </p>
-                  <p className="mt-1 text-[11px] text-white/70">
+                  <p className="mt-1 text-[11px] text-[#5A606D]">
                     Accepted open battles appear here while players play in Ludo King.
                   </p>
                 </div>
@@ -354,7 +331,7 @@ export function MatchmakerHub({
                     <div
                       key={battle.code}
                       data-testid={`running-battle-${battle.code}`}
-                      className={`rounded-xl border border-white/15 bg-white/10 px-4 py-3 shadow-sm backdrop-blur-xs ${
+                      className={`w-full rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] px-4 py-3 text-white shadow-emerald-card ${
                         exiting ? 'animate-battle-out pointer-events-none' : 'animate-battle-in'
                       }`}
                     >

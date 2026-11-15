@@ -81,17 +81,23 @@ test('validateWalletTransaction validates deposit and withdrawal rules', () => {
   });
 });
 
-test('validateLudoKingCode accepts 6-10 alphanumeric codes and strips spaces/hyphens', () => {
-  assert.deepEqual(validateLudoKingCode('4829 1034'), {
+test('validateLudoKingCode enforces 8 numeric digits starting with 0 and strips spaces/hyphens', () => {
+  assert.deepEqual(validateLudoKingCode('01234567'), {
     valid: true,
-    value: '48291034',
+    value: '01234567',
   });
-  assert.deepEqual(validateLudoKingCode('123456'), {
+  assert.deepEqual(validateLudoKingCode('0789 1234'), {
     valid: true,
-    value: '123456',
+    value: '07891234',
   });
-  assert.equal(validateLudoKingCode('12345').valid, false);
-  assert.equal(validateLudoKingCode('12345678901').valid, false);
+  assert.deepEqual(validateLudoKingCode('0000-1234'), {
+    valid: true,
+    value: '00001234',
+  });
+  assert.equal(validateLudoKingCode('48291034').valid, false);
+  assert.equal(validateLudoKingCode('0123456').valid, false);
+  assert.equal(validateLudoKingCode('012345678').valid, false);
+  assert.equal(validateLudoKingCode('0123ABCD').valid, false);
 });
 
 test('formatLudoKingCode groups 8-digit and 6-digit codes clearly', () => {

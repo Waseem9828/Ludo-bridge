@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminPanelPage } from './components/AdminPanelPage';
 import {
   confirmMatchResult,
@@ -22,6 +22,7 @@ import { LeaderboardPage } from './components/LeaderboardPage';
 import { MatchmakerHub } from './components/MatchmakerHub';
 import { MatchRoom } from './components/MatchRoom';
 import { MobileNav } from './components/MobileNav';
+import { NotificationDrawer } from './components/NotificationDrawer';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { ProfilePage } from './components/ProfilePage';
 import { ReferralPage } from './components/ReferralPage';
@@ -43,6 +44,11 @@ import {
   type WalletTransaction,
 } from './shared/matchmaking';
 import {
+  deriveAppNotifications,
+  getUnreadNotificationCount,
+  type AppNotification,
+} from './utils/notifications';
+import {
   getInteractiveClickTarget,
   playSound,
   readSoundEnabled,
@@ -55,6 +61,7 @@ const ACTIVE_SESSION_KEY = 'ludobridge.activeSession';
 const HOSTED_ROOMS_KEY = 'ludobridge.hostedRooms';
 const WALLET_KEY = 'ludobridge.wallet';
 const PERSONAL_MATCHES_KEY = 'ludobridge.personalMatches';
+const NOTIFICATION_READ_KEY = 'ludobridge.readNotifications';
 
 interface StoredSession {
   roomCode: string;
@@ -293,6 +300,27 @@ function writePersonalMatches(records: CompletedMatchRecord[]): void {
   }
 }
 
+function readReadNotificationIds(): string[] {
+  try {
+    const raw = window.localStorage.getItem(NOTIFICATION_READ_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeReadNotificationIds(ids: string[]): void {
+  try {
+    window.localStorage.setItem(NOTIFICATION_READ_KEY, JSON.stringify(ids.slice(-100)));
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export default function App() {
   const [initialRoute] = useState<ParsedRoute>(() => parseRouteFromLocation());
   const [view, setView] = useState<AppViewRoute>(() => initialRoute.view);
@@ -320,6 +348,10 @@ export default function App() {
   );
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [guideOpen, setGuideOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [readNotificationIds, setReadNotificationIds] = useState<string[]>(() =>
+    readReadNotificationIds()
+  );
   const [soundEnabled, setSoundEnabledState] = useState<boolean>(() =>
     readSoundEnabled()
   );
@@ -714,6 +746,54 @@ export default function App() {
     }
   };
 
+  const notifications = useMemo(
+    () =>
+      deriveAppNotifications({
+        activeRoom,
+        activePlayerId,
+        playerName,
+        hostedRooms,
+        hub,
+        personalMatches,
+      }),
+    [activePlayerId, activeRoom, hostedRooms, hub, personalMatches, playerName]
+  );
+
+  const { hasRedDot } = useMemo(
+    () => getUnreadNotificationCount(notifications, readNotificationIds),
+    [notifications, readNotificationIds]
+  );
+
+  const handleMarkAllNotificationsRead = useCallback(() => {
+    setReadNotificationIds((prev) => {
+      const merged = Array.from(new Set([...prev, ...notifications.map((n) => n.id)]));
+      writeReadNotificationIds(merged);
+      return merged;
+    });
+  }, [notifications]);
+
+  const handleSelectNotification = useCallback(
+    (notification: AppNotification) => {
+      setReadNotificationIds((prev) => {
+        if (prev.includes(notification.id)) return prev;
+        const next = [...prev, notification.id];
+        writeReadNotificationIds(next);
+        return next;
+      });
+      setNotificationsOpen(false);
+      if (notification.actionView === 'lobby' && view !== 'lobby') {
+        if (view === 'room') {
+          void handleLeaveRoom();
+        } else {
+          navigateLobby();
+        }
+      } else if (notification.actionView === 'history' && view !== 'history') {
+        void navigateToRoute('history');
+      }
+    },
+    [navigateLobby, navigateToRoute, view]
+  );
+
   if (view === 'admin') {
     return <AdminPanelPage onExitAdmin={() => navigateToRoute('home')} />;
   }
@@ -725,12 +805,14 @@ export default function App() {
         sidebarOpen={sidebarOpen}
         walletBalance={wallet.balance}
         soundEnabled={soundEnabled}
+        hasNotificationDot={hasRedDot}
         onToggleSound={handleToggleSound}
         onOpenSidebar={() => setSidebarOpen(true)}
         onNavigateHome={navigateHome}
         onNavigateWallet={() => navigateToRoute('wallet')}
         onLeaveRoom={handleLeaveRoom}
         onOpenGuide={() => setGuideOpen(true)}
+        onOpenNotifications={() => setNotificationsOpen(true)}
       />
 
       <main className="flex-1 w-full flex flex-col pt-16 sm:pt-[72px]">
@@ -902,6 +984,15 @@ export default function App() {
         avatarId={avatarId}
         onClose={() => setSidebarOpen(false)}
         onNavigate={navigateToRoute}
+      />
+
+      <NotificationDrawer
+        open={notificationsOpen}
+        notifications={notifications}
+        readIds={readNotificationIds}
+        onClose={() => setNotificationsOpen(false)}
+        onMarkAllRead={handleMarkAllNotificationsRead}
+        onSelectNotification={handleSelectNotification}
       />
 
       <GuideModal open={guideOpen} onClose={() => setGuideOpen(false)} />

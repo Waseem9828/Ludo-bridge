@@ -235,12 +235,13 @@ export function validateLudoKingCode(raw: string): {
   value: string;
   error?: string;
 } {
-  const cleaned = raw.trim().replace(/[\s-]+/g, '').toUpperCase();
-  if (!/^[A-Z0-9]{6,10}$/.test(cleaned)) {
+  const cleaned = String(raw ?? '').trim().replace(/[\s-]+/g, '');
+  if (!/^0[0-9]{7}$/.test(cleaned)) {
     return {
       valid: false,
       value: cleaned,
-      error: 'Ludo King room codes must be 6 to 10 digits or letters.',
+      error:
+        'Ludo King Classic room code must be 8 numeric digits starting with 0 (e.g. 01234567).',
     };
   }
   return { valid: true, value: cleaned };
