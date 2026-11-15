@@ -1165,6 +1165,7 @@ export default function App() {
                 winnerScreenshot
               );
               setActiveRoom(room);
+              fetchHubSnapshot().then(setHub).catch(() => {});
             }}
             onRematch={async () => {
               const { room } = await requestRematch(activeRoom.code);

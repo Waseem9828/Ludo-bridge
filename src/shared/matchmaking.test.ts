@@ -26,6 +26,7 @@ import {
   getMockReferralHistory,
   getOpenBattleRemainingMs,
   getResultConfirmationState,
+  isBattleResultPendingApproval,
   isValidAvatarId,
   MAX_ACTIVE_BATTLES_PER_PLAYER,
   mergeAnimatedBattles,
@@ -801,3 +802,102 @@ test('MATCH_PENALTY_RULES covers wrong result, abuse, and extra fair-play penalt
     assert.ok(rule.penaltyLabel.includes('₹'));
   }
 });
+
+test('isBattleResultPendingApproval keeps submitted unapproved battles at top of Open Battles until confirmed or admin-approved', () => {
+  const store = createInitialMockStore(1_700_000_000_000);
+  const baseRoom = store.rooms['RN100Z'];
+  const host = baseRoom.players[0];
+  const opp = baseRoom.players[1];
+
+  // 1. Loser clicks "I Lost" -> winner has not confirmed & admin has not approved yet
+  const loserSubmittedRoom: MatchRoom = {
+    ...baseRoom,
+    status: 'completed',
+    winnerId: host.id,
+    winnerName: host.name,
+    updatedAt: new Date(1_700_000_100_000).toISOString(),
+    resultReport: createInitialResultReport(
+      baseRoom,
+      host.id,
+      opp.id,
+      '2026-11-15T10:00:00.000Z'
+    ),
+  };
+
+  assert.equal(isBattleResultPendingApproval(loserSubmittedRoom), true);
+  store.rooms['RN100Z'] = loserSubmittedRoom;
+
+  const snap = buildHubSnapshotFromStore(store);
+  assert.ok(snap.runningBattles.some((r) => r.code === 'RN100Z'));
+  // Active matches count excludes completed pending-review rooms
+  assert.equal(snap.stats.activeMatchesCount, 5);
+
+  const loserPartition = partitionLobbyBattles({
+    openLobbies: snap.openLobbies,
+    runningBattles: snap.runningBattles,
+    myRoomPlayerIds: { RN100Z: opp.id },
+    playerName: opp.name,
+  });
+  assert.equal(loserPartition.openList[0]?.code, 'RN100Z');
+  assert.equal(
+    loserPartition.runningList.some((r) => r.code === 'RN100Z'),
+    false
+  );
+
+  // Spectator should NOT see completed pending-approval room in Running Battles
+  const spectatorPartition = partitionLobbyBattles({
+    openLobbies: snap.openLobbies,
+    runningBattles: snap.runningBattles,
+    myRoomPlayerIds: {},
+    playerName: 'SpectatorUser',
+  });
+  assert.equal(
+    spectatorPartition.openList.some((r) => r.code === 'RN100Z'),
+    false
+  );
+  assert.equal(
+    spectatorPartition.runningList.some((r) => r.code === 'RN100Z'),
+    false
+  );
+
+  // 2. Disputed result remains pending Admin approval even if both interacted
+  const disputedRoom = applyResultConfirmation(
+    loserSubmittedRoom,
+    host.id,
+    'dispute',
+    '2026-11-15T10:01:00.000Z',
+    'Score mismatch'
+  );
+  assert.equal(isBattleResultPendingApproval(disputedRoom), true);
+
+  // 3. Admin approves -> clears pending status and removes from hub
+  const adminApprovedRoom: MatchRoom = {
+    ...disputedRoom,
+    resultReport: {
+      ...disputedRoom.resultReport!,
+      winnerConfirmed: true,
+      loserConfirmed: true,
+      disputedByPlayerId: null,
+      disputeReason: null,
+      adminApprovedAt: '2026-11-15T10:02:00.000Z',
+    },
+  };
+  assert.equal(isBattleResultPendingApproval(adminApprovedRoom), false);
+
+  // 4. Both players confirm without dispute -> clears pending status and removes from hub
+  const bothConfirmedRoom = applyResultConfirmation(
+    loserSubmittedRoom,
+    host.id,
+    'confirm',
+    '2026-11-15T10:03:00.000Z'
+  );
+  assert.equal(isBattleResultPendingApproval(bothConfirmedRoom), false);
+
+  store.rooms['RN100Z'] = bothConfirmedRoom;
+  const clearedSnap = buildHubSnapshotFromStore(store);
+  assert.equal(
+    clearedSnap.runningBattles.some((r) => r.code === 'RN100Z'),
+    false
+  );
+});
+

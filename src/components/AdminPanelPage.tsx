@@ -45,7 +45,11 @@ import {
   type AdminLevelConfig,
   type AdminSystemSettings,
 } from '../shared/admin';
-import { formatLudoKingCode, type MatchRoom } from '../shared/matchmaking';
+import {
+  formatLudoKingCode,
+  isBattleResultPendingApproval,
+  type MatchRoom,
+} from '../shared/matchmaking';
 
 type AdminTab =
   | 'overview'
@@ -309,6 +313,9 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
   const getRoomStatusLabel = (room: MatchRoom) => {
     if (room.resultReport?.disputedByPlayerId) {
       return { text: 'Disputed', cls: 'text-[#DC2626]' };
+    }
+    if (isBattleResultPendingApproval(room)) {
+      return { text: 'Pending Approval', cls: 'text-[#D97706]' };
     }
     if (room.status === 'completed') {
       return { text: 'Completed', cls: 'text-[#16A34A]' };
@@ -945,7 +952,10 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
                                         </button>
                                       )}
 
-                                      {p1 && p2 && room.status !== 'completed' && (
+                                      {p1 &&
+                                        p2 &&
+                                        (room.status !== 'completed' ||
+                                          isBattleResultPendingApproval(room)) && (
                                         <>
                                           <button
                                             type="button"

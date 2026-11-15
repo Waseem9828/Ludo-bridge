@@ -1,8 +1,9 @@
-import type {
-  CompletedMatchRecord,
-  HubSnapshot,
-  MatchRoom,
-  TokenColor,
+import {
+  isBattleResultPendingApproval,
+  type CompletedMatchRecord,
+  type HubSnapshot,
+  type MatchRoom,
+  type TokenColor,
 } from './matchmaking';
 import {
   createInitialAdminStore,
@@ -379,7 +380,11 @@ export function buildHubSnapshotFromStore(store: StoreState): HubSnapshot {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   const runningBattles = allRooms
-    .filter((room) => room.players.length === 2 && room.status !== 'completed')
+    .filter(
+      (room) =>
+        room.players.length === 2 &&
+        (room.status !== 'completed' || isBattleResultPendingApproval(room))
+    )
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, 12);
 
@@ -389,7 +394,7 @@ export function buildHubSnapshotFromStore(store: StoreState): HubSnapshot {
     recentMatches: store.recentMatches.slice(0, 20),
     stats: {
       openCount: openLobbies.length,
-      activeMatchesCount: runningBattles.length,
+      activeMatchesCount: runningBattles.filter((room) => room.status !== 'completed').length,
       completedCount: store.recentMatches.length,
     },
   };

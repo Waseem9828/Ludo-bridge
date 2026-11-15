@@ -41,6 +41,7 @@ export interface MatchResultReport {
   winnerScreenshot?: string | null;
   disputedByPlayerId?: string | null;
   disputeReason?: string | null;
+  adminApprovedAt?: string | null;
 }
 
 export interface MatchRoom {
@@ -591,6 +592,25 @@ export function findParticipantPlayerId(
   return matched ? matched.id : null;
 }
 
+export function isBattleResultPendingApproval(
+  room: Pick<MatchRoom, 'players' | 'status' | 'winnerId' | 'resultReport'>
+): boolean {
+  if (room.players.length < 2 || room.status !== 'completed' || !room.winnerId) {
+    return false;
+  }
+  const report = room.resultReport;
+  if (!report) {
+    return false;
+  }
+  if (report.adminApprovedAt) {
+    return false;
+  }
+  if (report.disputedByPlayerId) {
+    return true;
+  }
+  return !report.winnerConfirmed || !report.loserConfirmed;
+}
+
 export function partitionLobbyBattles(params: {
   openLobbies: MatchRoom[];
   runningBattles: MatchRoom[];
@@ -614,7 +634,9 @@ export function partitionLobbyBattles(params: {
 
   return {
     openList: [...myJoinedBattles, ...waitingOpen],
-    runningList: runningBattles.filter((room) => !pinnedCodes.has(room.code)),
+    runningList: runningBattles.filter(
+      (room) => !pinnedCodes.has(room.code) && !isBattleResultPendingApproval(room)
+    ),
   };
 }
 

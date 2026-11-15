@@ -219,6 +219,7 @@ export function controlAdminMatch(
           loserConfirmed: true,
           disputedByPlayerId: null,
           disputeReason: null,
+          adminApprovedAt: now,
         };
         store.recentMatches.unshift({
           id: `rec-${Date.now().toString(36)}`,

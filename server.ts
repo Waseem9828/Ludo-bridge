@@ -773,6 +773,7 @@ async function startServer() {
 
     persistStore();
     broadcastRoom(updatedRoom);
+    broadcastHub();
     res.json({ room: updatedRoom });
   });
 
@@ -1052,6 +1053,7 @@ async function startServer() {
         loserConfirmedAt: now,
         disputedByPlayerId: null,
         disputeReason: null,
+        adminApprovedAt: now,
       };
       room.messages.push({
         id: createId('msg'),

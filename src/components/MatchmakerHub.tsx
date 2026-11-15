@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { ArrowRight, Trash2 } from 'lucide-react';
+import { ArrowRight, Eye, Trash2 } from 'lucide-react';
 import {
   findParticipantPlayerId,
   formatCountdownMMSS,
   getOpenBattleRemainingMs,
+  isBattleResultPendingApproval,
   mergeAnimatedBattles,
   partitionLobbyBattles,
   validateBattleAmount,
@@ -12,6 +13,7 @@ import {
   type HubSnapshot,
   type MatchRoom,
 } from '../shared/matchmaking';
+import { LobbyBattleDetailSheet } from './LobbyBattleDetailSheet';
 import { PageTitleHeading } from './PageTitleHeading';
 import { PlayerAvatar } from './PlayerAvatar';
 
@@ -47,6 +49,7 @@ export function MatchmakerHub({
   const [actionErrorMsg, setActionErrorMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [busyCode, setBusyCode] = useState<string | null>(null);
+  const [detailBattleCode, setDetailBattleCode] = useState<string | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   const combinedMyRooms = useMemo(
@@ -63,6 +66,24 @@ export function MatchmakerHub({
         playerName,
       }),
     [combinedMyRooms, hub.openLobbies, hub.runningBattles, playerName]
+  );
+
+  const selectedDetailRoom = useMemo(
+    () =>
+      detailBattleCode
+        ? openList.find((room) => room.code === detailBattleCode) ??
+          hub.runningBattles.find((room) => room.code === detailBattleCode) ??
+          null
+        : null,
+    [detailBattleCode, hub.runningBattles, openList]
+  );
+
+  const selectedDetailPlayerId = useMemo(
+    () =>
+      selectedDetailRoom
+        ? findParticipantPlayerId(selectedDetailRoom, combinedMyRooms, playerName)
+        : null,
+    [combinedMyRooms, playerName, selectedDetailRoom]
   );
 
   const [openEntries, setOpenEntries] = useState<AnimatedBattleEntry[]>(() =>
@@ -288,7 +309,9 @@ export function MatchmakerHub({
                   const host = lobby.players[0];
                   if (!host) return null;
                   const opp = lobby.players[1] ?? null;
-                  const isJoinedBattle = Boolean(opp) && lobby.status !== 'completed';
+                  const isPendingResult = isBattleResultPendingApproval(lobby);
+                  const isJoinedBattle =
+                    Boolean(opp) && (lobby.status !== 'completed' || isPendingResult);
                   const ownPlayerId = hostedRooms[lobby.code];
                   const participantId = findParticipantPlayerId(
                     lobby,
@@ -313,6 +336,7 @@ export function MatchmakerHub({
                       key={lobby.code}
                       data-testid={`open-battle-${lobby.code}`}
                       data-joined={isJoinedBattle ? 'true' : 'false'}
+                      data-result-pending={isPendingResult ? 'true' : 'false'}
                       className={`w-full flex items-center justify-between gap-3 rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] px-4 py-3 text-white shadow-emerald-card ${
                         exiting ? 'animate-battle-out pointer-events-none' : 'animate-battle-in'
                       }`}
@@ -334,11 +358,18 @@ export function MatchmakerHub({
                           {isJoinedBattle && opp ? (
                             <p className="mt-0.5 flex items-center gap-1.5 text-xs font-semibold text-[#FCD34D] truncate">
                               <span
-                                className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#34D399] animate-pulse"
+                                className={`inline-block h-2 w-2 shrink-0 rounded-full animate-pulse ${
+                                  isPendingResult ? 'bg-[#FCD34D]' : 'bg-[#34D399]'
+                                }`}
                                 aria-hidden="true"
                               />
                               <span className="truncate">
                                 {host.name} vs {opp.name}
+                                {isPendingResult
+                                  ? lobby.resultReport?.disputedByPlayerId
+                                    ? ' · Admin Review'
+                                    : ' · Result Pending'
+                                  : ''}
                               </span>
                             </p>
                           ) : ownPlayerId ? (
@@ -363,7 +394,19 @@ export function MatchmakerHub({
                         </div>
                       </div>
 
-                      {isJoinedBattle ? (
+                      {isPendingResult ? (
+                        <button
+                          type="button"
+                          data-testid={`open-battle-action-${lobby.code}`}
+                          data-state="result-pending"
+                          onClick={() => setDetailBattleCode(lobby.code)}
+                          aria-label={`View battle details for ₹${lobby.amount}`}
+                          className="inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-full bg-[#FCD34D] px-4 sm:px-5 py-1.5 text-xs font-bold text-[#16181D] shadow-pill-btn transition-colors hover:bg-[#FBBF24] whitespace-nowrap shrink-0"
+                        >
+                          <Eye className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                          <span>View</span>
+                        </button>
+                      ) : isJoinedBattle ? (
                         <button
                           type="button"
                           data-testid={`open-battle-action-${lobby.code}`}
@@ -487,6 +530,14 @@ export function MatchmakerHub({
           </div>
         </div>
       </section>
+
+      <LobbyBattleDetailSheet
+        room={selectedDetailRoom}
+        currentPlayerId={selectedDetailPlayerId}
+        currentPlayerAvatarId={playerAvatarId}
+        onClose={() => setDetailBattleCode(null)}
+        onEnterBattle={onEnterBattle}
+      />
     </div>
   );
 }
