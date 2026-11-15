@@ -3,12 +3,15 @@ import { describe, it } from 'node:test';
 import {
   applyAdminDepositAction,
   applyAdminWithdrawalAction,
+  buildUpiPaymentUri,
   calculateAdminEarnings,
   calculateMatchCommission,
   createInitialAdminStore,
   imposeAdminPenalty,
   resolvePlayerLevelFromXp,
+  submitDepositRequest,
   updateAdminPlayer,
+  validateUtrReference,
   waiveAdminPenalty,
 } from './admin';
 import { createInitialMockStore } from './mockStore';
@@ -167,5 +170,92 @@ describe('admin engine logic', () => {
     const zoya = res.admin.players.find((p) => p.id === 'mock-zoya')!;
     assert.equal(zoya.level, 4);
     assert.equal(zoya.status, 'suspended');
+  });
+
+  it('builds exact-amount UPI QR & app intent URIs and validates UTR references', () => {
+    const generic = buildUpiPaymentUri({
+      upiId: 'ludoleague@ybl',
+      merchantName: 'Ludo league.online',
+      amount: 750,
+      transactionRef: 'DEP123',
+      scheme: 'upi',
+    });
+    assert.ok(generic.startsWith('upi://pay?'));
+    assert.ok(generic.includes('pa=ludoleague%40ybl'));
+    assert.ok(generic.includes('pn=Ludo%20league.online'));
+    assert.ok(!generic.includes('+'), 'UPI URI must use %20 instead of +');
+    assert.ok(generic.includes('am=750.00'));
+    assert.ok(generic.includes('cu=INR'));
+    assert.ok(generic.includes('tr=DEP123'));
+
+    const androidPhonePe = buildUpiPaymentUri({
+      upiId: 'ludoleague@ybl',
+      merchantName: 'Ludo league.online',
+      amount: 500,
+      scheme: 'phonepe',
+      androidIntent: true,
+    });
+    assert.equal(
+      androidPhonePe,
+      'intent://pay?pa=ludoleague%40ybl&pn=Ludo%20league.online&am=500.00&cu=INR&tn=Wallet%20Deposit#Intent;scheme=upi;package=com.phonepe.app;end'
+    );
+    assert.ok(!androidPhonePe.includes('&tr='), 'should omit tr when not passed');
+
+    assert.ok(
+      buildUpiPaymentUri({ upiId: 'ludoleague@ybl', merchantName: 'Ludo', amount: 250, scheme: 'phonepe' }).startsWith('phonepe://pay?')
+    );
+    assert.ok(
+      buildUpiPaymentUri({ upiId: 'ludoleague@ybl', merchantName: 'Ludo', amount: 250, scheme: 'gpay' }).startsWith('tez://upi/pay?')
+    );
+    assert.ok(
+      buildUpiPaymentUri({ upiId: 'ludoleague@ybl', merchantName: 'Ludo', amount: 250, scheme: 'paytm' }).startsWith('paytmmp://pay?')
+    );
+
+    assert.equal(validateUtrReference('').valid, false);
+    assert.equal(validateUtrReference('12345').valid, false);
+    const goodUtr = validateUtrReference('4318 9201 4412');
+    assert.equal(goodUtr.valid, true);
+    assert.equal(goodUtr.value, '431892014412');
+  });
+
+  it('queues player deposit request for admin approval and prevents duplicate UTR', () => {
+    const admin = createInitialAdminStore(1700000000000);
+    const submitted = submitDepositRequest(
+      admin,
+      {
+        playerName: 'AmanTest',
+        amount: 500,
+        method: 'PhonePe UPI',
+        reference: '431892014499',
+      },
+      '2026-01-01T12:00:00.000Z'
+    );
+    assert.equal(submitted.error, undefined);
+    assert.ok(submitted.deposit);
+    assert.equal(submitted.deposit.status, 'pending');
+    assert.equal(submitted.deposit.amount, 500);
+    assert.equal(submitted.deposit.reference, '431892014499');
+
+    const dup = submitDepositRequest(
+      submitted.admin,
+      {
+        playerName: 'AmanTest',
+        amount: 500,
+        method: 'PhonePe UPI',
+        reference: '431892014499',
+      },
+      '2026-01-01T12:01:00.000Z'
+    );
+    assert.ok(dup.error, 'should block duplicate UTR submission');
+
+    const approved = applyAdminDepositAction(
+      submitted.admin,
+      submitted.deposit.id,
+      'approve',
+      '2026-01-01T12:02:00.000Z'
+    );
+    assert.equal(approved.error, undefined);
+    const player = approved.admin.players.find((p) => p.name === 'AmanTest')!;
+    assert.equal(player.walletBalance, 500);
   });
 });

@@ -23,6 +23,7 @@ export type AppViewRoute =
   | 'room'
   | 'wallet'
   | 'wallet-deposit'
+  | 'wallet-deposit-pay'
   | 'wallet-withdraw'
   | 'profile'
   | 'history'
@@ -149,6 +150,7 @@ export function SidebarDrawer({
                 route === 'wallet'
                   ? currentView === 'wallet' ||
                     currentView === 'wallet-deposit' ||
+                    currentView === 'wallet-deposit-pay' ||
                     currentView === 'wallet-withdraw'
                   : currentView === route;
               return (

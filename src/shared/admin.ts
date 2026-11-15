@@ -73,6 +73,8 @@ export interface AdminSystemSettings {
   minWithdrawal: number;
   maxWithdrawal: number;
   maintenanceMode: boolean;
+  depositUpiId?: string;
+  depositMerchantName?: string;
 }
 
 export interface AdminAuditEntry {
@@ -134,6 +136,8 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSystemSettings = {
   minWithdrawal: 50,
   maxWithdrawal: 50000,
   maintenanceMode: false,
+  depositUpiId: 'ludoleague@ybl',
+  depositMerchantName: 'Ludo league.online',
 };
 
 export function resolvePlayerLevelFromXp(
@@ -537,6 +541,186 @@ export function applyAdminDepositAction(
       ...admin,
       deposits: nextDeposits,
       players: nextPlayers,
+      auditLogs: [audit, ...admin.auditLogs].slice(0, 80),
+    },
+  };
+}
+
+export type UpiAppScheme = 'upi' | 'phonepe' | 'gpay' | 'paytm';
+
+export function validateUtrReference(raw: string): {
+  valid: boolean;
+  value: string;
+  error?: string;
+} {
+  const cleaned = String(raw ?? '')
+    .trim()
+    .replace(/[\s-]+/g, '')
+    .toUpperCase();
+  if (!cleaned) {
+    return {
+      valid: false,
+      value: cleaned,
+      error: 'कृपया पेमेंट पूरा होने के बाद UTR / Reference नंबर दर्ज करें।',
+    };
+  }
+  if (!/^[A-Z0-9]{10,22}$/.test(cleaned)) {
+    return {
+      valid: false,
+      value: cleaned,
+      error: 'UTR नंबर 10 से 22 अक्षर/अंकों का होना चाहिए (जैसे 431892014412)।',
+    };
+  }
+  return { valid: true, value: cleaned };
+}
+
+export function buildUpiPaymentUri(params: {
+  upiId: string;
+  merchantName: string;
+  amount: number;
+  transactionRef?: string;
+  note?: string;
+  scheme?: UpiAppScheme;
+  androidIntent?: boolean;
+}): string {
+  const schemePrefix: Record<UpiAppScheme, string> = {
+    upi: 'upi://pay',
+    phonepe: 'phonepe://pay',
+    gpay: 'tez://upi/pay',
+    paytm: 'paytmmp://pay',
+  };
+  const androidPackage: Partial<Record<UpiAppScheme, string>> = {
+    phonepe: 'com.phonepe.app',
+    gpay: 'com.google.android.apps.nbu.paisa.user',
+    paytm: 'net.one97.paytm',
+  };
+  const safeAmount =
+    Number.isFinite(params.amount) && params.amount > 0
+      ? Number(params.amount).toFixed(2)
+      : '0.00';
+
+  const entries: [string, string][] = [
+    ['pa', params.upiId.trim() || 'ludoleague@ybl'],
+    ['pn', params.merchantName.trim() || 'Ludo league.online'],
+    ['am', safeAmount],
+    ['cu', 'INR'],
+    ['tn', params.note?.trim() || 'Wallet Deposit'],
+  ];
+  if (params.transactionRef?.trim()) {
+    entries.push(['tr', params.transactionRef.trim()]);
+  }
+
+  const queryString = entries
+    .map(([key, val]) => `${key}=${encodeURIComponent(val)}`)
+    .join('&');
+
+  const chosenScheme = params.scheme ?? 'upi';
+  const pkg = params.androidIntent ? androidPackage[chosenScheme] : undefined;
+  if (pkg) {
+    return `intent://pay?${queryString}#Intent;scheme=upi;package=${pkg};end`;
+  }
+
+  const base = schemePrefix[chosenScheme] ?? schemePrefix.upi;
+  return `${base}?${queryString}`;
+}
+
+export function submitDepositRequest(
+  admin: AdminStoreState,
+  params: {
+    playerName: string;
+    amount: number;
+    method?: string;
+    reference: string;
+  },
+  nowIso: string
+): {
+  admin: AdminStoreState;
+  deposit?: AdminDepositRecord;
+  error?: string;
+} {
+  const cleanName = params.playerName.trim().replace(/\s+/g, ' ').slice(0, 24);
+  if (cleanName.length < 2) {
+    return { admin, error: 'Valid player name is required to submit a deposit.' };
+  }
+
+  const amount = Math.round(Number(params.amount));
+  const minDeposit = admin.settings.minDeposit || 10;
+  const maxDeposit = admin.settings.maxDeposit || 50000;
+  if (!Number.isFinite(amount) || amount < minDeposit || amount > maxDeposit) {
+    return {
+      admin,
+      error: `Deposit amount must be between ₹${minDeposit.toLocaleString('en-IN')} and ₹${maxDeposit.toLocaleString('en-IN')}.`,
+    };
+  }
+
+  const utrCheck = validateUtrReference(params.reference);
+  if (!utrCheck.valid) {
+    return { admin, error: utrCheck.error };
+  }
+
+  const duplicateUtr = admin.deposits.find(
+    (d) =>
+      d.reference.trim().toUpperCase() === utrCheck.value &&
+      d.status !== 'rejected'
+  );
+  if (duplicateUtr) {
+    return {
+      admin,
+      error: `UTR ${utrCheck.value} is already submitted (${duplicateUtr.id} · ${duplicateUtr.status}).`,
+    };
+  }
+
+  const existingPlayer = admin.players.find(
+    (p) => p.name.trim().toLowerCase() === cleanName.toLowerCase()
+  );
+  const playerId =
+    existingPlayer?.id ??
+    `plr-${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10) || 'player'}-${Date.now().toString(36).slice(-4)}`;
+
+  const nextPlayers = existingPlayer
+    ? admin.players
+    : [
+        {
+          id: playerId,
+          name: cleanName,
+          phoneOrTag: `${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '')}@upi`,
+          walletBalance: 0,
+          xp: 0,
+          level: 1,
+          matchesPlayed: 0,
+          wins: 0,
+          totalPenalties: 0,
+          status: 'active' as const,
+          joinedAt: nowIso,
+        },
+        ...admin.players,
+      ];
+
+  const deposit: AdminDepositRecord = {
+    id: `DEP-${Math.floor(1100 + Math.random() * 8899)}`,
+    playerId,
+    playerName: existingPlayer?.name ?? cleanName,
+    amount,
+    method: params.method?.trim() || 'UPI Intent',
+    reference: utrCheck.value,
+    status: 'pending',
+    createdAt: nowIso,
+  };
+
+  const audit: AdminAuditEntry = {
+    id: `AUD-${Date.now().toString(36)}`,
+    category: 'deposit',
+    action: 'Deposit Request Submitted',
+    detail: `${deposit.id} · ₹${amount.toLocaleString('en-IN')} by ${deposit.playerName} (UTR ${utrCheck.value})`,
+    createdAt: nowIso,
+  };
+
+  return {
+    deposit,
+    admin: {
+      ...admin,
+      players: nextPlayers,
+      deposits: [deposit, ...admin.deposits],
       auditLogs: [audit, ...admin.auditLogs].slice(0, 80),
     },
   };

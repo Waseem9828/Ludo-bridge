@@ -3,11 +3,14 @@ import {
   applyAdminWithdrawalAction,
   calculateAdminEarnings,
   calculateMatchCommission,
+  DEFAULT_ADMIN_SETTINGS,
   ensureAdminStore,
   imposeAdminPenalty,
+  submitDepositRequest,
   updateAdminPlayer,
   waiveAdminPenalty,
   type AdminDashboardSnapshot,
+  type AdminDepositRecord,
   type AdminLevelConfig,
   type AdminStoreState,
   type AdminSystemSettings,
@@ -89,6 +92,83 @@ async function adminRequest<T>(
     }
     throw err;
   }
+}
+
+export interface DepositPaymentConfig {
+  upiId: string;
+  merchantName: string;
+  minDeposit: number;
+  maxDeposit: number;
+}
+
+export function fetchDepositConfig(): Promise<DepositPaymentConfig> {
+  return adminRequest<DepositPaymentConfig>('/api/deposit/config', undefined, () => {
+    const store = readFallbackStore();
+    const admin = ensureAdminStore(store.adminState);
+    return {
+      upiId:
+        admin.settings.depositUpiId ||
+        DEFAULT_ADMIN_SETTINGS.depositUpiId ||
+        'ludoleague@ybl',
+      merchantName:
+        admin.settings.depositMerchantName ||
+        DEFAULT_ADMIN_SETTINGS.depositMerchantName ||
+        'Ludo league.online',
+      minDeposit: admin.settings.minDeposit,
+      maxDeposit: admin.settings.maxDeposit,
+    };
+  });
+}
+
+export function fetchPlayerDeposits(
+  playerName: string
+): Promise<{ deposits: AdminDepositRecord[] }> {
+  const clean = playerName.trim();
+  return adminRequest<{ deposits: AdminDepositRecord[] }>(
+    `/api/deposits/player?playerName=${encodeURIComponent(clean)}`,
+    undefined,
+    () => {
+      const store = readFallbackStore();
+      const admin = ensureAdminStore(store.adminState);
+      const deposits = clean
+        ? admin.deposits.filter(
+            (d) => d.playerName.trim().toLowerCase() === clean.toLowerCase()
+          )
+        : [];
+      return { deposits };
+    }
+  );
+}
+
+export function submitPlayerDepositRequest(payload: {
+  playerName: string;
+  amount: number;
+  method: string;
+  reference: string;
+}): Promise<{ deposit: AdminDepositRecord; deposits: AdminDepositRecord[] }> {
+  return adminRequest<{ deposit: AdminDepositRecord; deposits: AdminDepositRecord[] }>(
+    '/api/deposits/request',
+    { method: 'POST', body: JSON.stringify(payload) },
+    () => {
+      const store = readFallbackStore();
+      const result = submitDepositRequest(
+        ensureAdminStore(store.adminState),
+        payload,
+        new Date().toISOString()
+      );
+      if (result.error || !result.deposit) {
+        throw new Error(result.error || 'Unable to submit deposit request.');
+      }
+      store.adminState = result.admin;
+      writeFallbackStore(store);
+      const deposits = result.admin.deposits.filter(
+        (d) =>
+          d.playerName.trim().toLowerCase() ===
+          result.deposit!.playerName.trim().toLowerCase()
+      );
+      return { deposit: result.deposit, deposits };
+    }
+  );
 }
 
 export function fetchAdminState(): Promise<AdminDashboardSnapshot> {

@@ -24,6 +24,7 @@ export function MobileNav({ currentView, onNavigate }: MobileNavProps) {
     route === 'wallet'
       ? currentView === 'wallet' ||
         currentView === 'wallet-deposit' ||
+        currentView === 'wallet-deposit-pay' ||
         currentView === 'wallet-withdraw'
       : route === 'lobby'
         ? currentView === 'lobby' || currentView === 'room'

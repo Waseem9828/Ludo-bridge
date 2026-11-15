@@ -2091,6 +2091,41 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
                           className="w-full min-h-[40px] rounded-lg border border-slate-200 px-3 font-mono text-xs text-slate-900"
                         />
                       </div>
+
+                      <div className="sm:col-span-2">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Merchant Deposit UPI ID (QR &amp; Intent)
+                        </label>
+                        <input
+                          type="text"
+                          data-testid="setting-deposit-upi-input"
+                          value={settingsDraft.depositUpiId ?? 'ludoleague@ybl'}
+                          onChange={(e) =>
+                            setSettingsDraft((prev) =>
+                              prev ? { ...prev, depositUpiId: e.target.value } : prev
+                            )
+                          }
+                          placeholder="e.g. ludoleague@ybl"
+                          className="w-full min-h-[40px] rounded-lg border border-slate-200 px-3 font-mono text-xs font-semibold text-slate-900"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Merchant Display Name
+                        </label>
+                        <input
+                          type="text"
+                          value={settingsDraft.depositMerchantName ?? 'Ludo league.online'}
+                          onChange={(e) =>
+                            setSettingsDraft((prev) =>
+                              prev ? { ...prev, depositMerchantName: e.target.value } : prev
+                            )
+                          }
+                          placeholder="e.g. Ludo league.online"
+                          className="w-full min-h-[40px] rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-900"
+                        />
+                      </div>
                     </div>
 
                     <div className="border-t border-slate-200 pt-3">

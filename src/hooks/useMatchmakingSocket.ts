@@ -8,6 +8,11 @@ interface UseMatchmakingSocketOptions {
   onHubSnapshot: (snapshot: HubSnapshot) => void;
   onRoomUpdated: (room: MatchRoom) => void;
   onRoomClosed: (code: string) => void;
+  onDepositUpdated?: (payload: {
+    playerName: string;
+    depositId: string;
+    status: string;
+  }) => void;
 }
 
 export function useMatchmakingSocket({
@@ -16,10 +21,21 @@ export function useMatchmakingSocket({
   onHubSnapshot,
   onRoomUpdated,
   onRoomClosed,
+  onDepositUpdated,
 }: UseMatchmakingSocketOptions) {
   const [connected, setConnected] = useState(false);
-  const callbacksRef = useRef({ onHubSnapshot, onRoomUpdated, onRoomClosed });
-  callbacksRef.current = { onHubSnapshot, onRoomUpdated, onRoomClosed };
+  const callbacksRef = useRef({
+    onHubSnapshot,
+    onRoomUpdated,
+    onRoomClosed,
+    onDepositUpdated,
+  });
+  callbacksRef.current = {
+    onHubSnapshot,
+    onRoomUpdated,
+    onRoomClosed,
+    onDepositUpdated,
+  };
 
   const targetRef = useRef({ roomCode, playerId });
   targetRef.current = { roomCode, playerId };
@@ -78,6 +94,10 @@ export function useMatchmakingSocket({
           } else if (msg.type === 'room:closed' && msg.payload) {
             const payload = msg.payload as { code: string };
             callbacksRef.current.onRoomClosed(payload.code);
+          } else if (msg.type === 'deposit:updated' && msg.payload) {
+            callbacksRef.current.onDepositUpdated?.(
+              msg.payload as { playerName: string; depositId: string; status: string }
+            );
           }
         } catch {
           // ignore malformed messages

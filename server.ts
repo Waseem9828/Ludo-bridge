@@ -36,8 +36,10 @@ import {
   applyAdminWithdrawalAction,
   calculateAdminEarnings,
   calculateMatchCommission,
+  DEFAULT_ADMIN_SETTINGS,
   ensureAdminStore,
   imposeAdminPenalty,
+  submitDepositRequest,
   updateAdminPlayer,
   waiveAdminPenalty,
   type AdminDashboardSnapshot,
@@ -186,6 +188,16 @@ function broadcastRoomClosed(code: string): void {
     if (client.roomCode === code) {
       sendJson(client.ws, { type: 'room:closed', payload: { code } });
     }
+  }
+}
+
+function broadcastDepositUpdate(payload: {
+  playerName: string;
+  depositId: string;
+  status: string;
+}): void {
+  for (const client of clients) {
+    sendJson(client.ws, { type: 'deposit:updated', payload });
   }
 }
 
@@ -866,6 +878,62 @@ async function startServer() {
     res.json({ closed: false, room });
   });
 
+  // --- Player Deposit Flow API ---
+  app.get('/api/deposit/config', (_req, res) => {
+    const admin = getAdminStore();
+    res.json({
+      upiId: admin.settings.depositUpiId || DEFAULT_ADMIN_SETTINGS.depositUpiId || 'ludoleague@ybl',
+      merchantName:
+        admin.settings.depositMerchantName ||
+        DEFAULT_ADMIN_SETTINGS.depositMerchantName ||
+        'Ludo league.online',
+      minDeposit: admin.settings.minDeposit,
+      maxDeposit: admin.settings.maxDeposit,
+    });
+  });
+
+  app.get('/api/deposits/player', (req, res) => {
+    const admin = getAdminStore();
+    const playerName = String(req.query?.playerName ?? '').trim().toLowerCase();
+    const deposits = playerName
+      ? admin.deposits.filter(
+          (d) => d.playerName.trim().toLowerCase() === playerName
+        )
+      : [];
+    res.json({ deposits });
+  });
+
+  app.post('/api/deposits/request', (req, res) => {
+    const admin = getAdminStore();
+    const result = submitDepositRequest(
+      admin,
+      {
+        playerName: String(req.body?.playerName ?? ''),
+        amount: Number(req.body?.amount ?? 0),
+        method: typeof req.body?.method === 'string' ? req.body.method : 'UPI Intent',
+        reference: String(req.body?.reference ?? ''),
+      },
+      new Date().toISOString()
+    );
+    if (result.error || !result.deposit) {
+      res.status(400).json({ error: result.error || 'Unable to submit deposit request.' });
+      return;
+    }
+    store.adminState = result.admin;
+    persistStore();
+    broadcastDepositUpdate({
+      playerName: result.deposit.playerName,
+      depositId: result.deposit.id,
+      status: result.deposit.status,
+    });
+    const playerDeposits = result.admin.deposits.filter(
+      (d) =>
+        d.playerName.trim().toLowerCase() ===
+        result.deposit!.playerName.trim().toLowerCase()
+    );
+    res.status(201).json({ deposit: result.deposit, deposits: playerDeposits });
+  });
+
   // --- Admin Panel API ---
   app.get('/api/admin/state', (_req, res) => {
     res.json(buildAdminSnapshot());
@@ -1126,6 +1194,14 @@ async function startServer() {
     }
     store.adminState = result.admin;
     persistStore();
+    const updatedDep = result.admin.deposits.find((d) => d.id === req.params.id);
+    if (updatedDep) {
+      broadcastDepositUpdate({
+        playerName: updatedDep.playerName,
+        depositId: updatedDep.id,
+        status: updatedDep.status,
+      });
+    }
     res.json(buildAdminSnapshot());
   });
 
@@ -1258,6 +1334,14 @@ async function startServer() {
         typeof s.maintenanceMode === 'boolean'
           ? s.maintenanceMode
           : admin.settings.maintenanceMode,
+      depositUpiId:
+        typeof s.depositUpiId === 'string' && s.depositUpiId.trim()
+          ? s.depositUpiId.trim().slice(0, 80)
+          : admin.settings.depositUpiId || DEFAULT_ADMIN_SETTINGS.depositUpiId,
+      depositMerchantName:
+        typeof s.depositMerchantName === 'string' && s.depositMerchantName.trim()
+          ? s.depositMerchantName.trim().slice(0, 60)
+          : admin.settings.depositMerchantName || DEFAULT_ADMIN_SETTINGS.depositMerchantName,
     };
     admin.auditLogs = [
       {

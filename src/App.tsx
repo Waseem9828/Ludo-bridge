@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminPanelPage } from './components/AdminPanelPage';
+import { fetchPlayerDeposits } from './api/adminClient';
 import {
   confirmMatchResult,
   createLobby,
@@ -13,6 +14,7 @@ import {
   submitLudoKingCode,
   toggleReady,
 } from './api/matchmakingClient';
+import { DepositPaymentPage } from './components/DepositPaymentPage';
 import { GstPolicyPage } from './components/GstPolicyPage';
 import { GuideModal } from './components/GuideModal';
 import { Header } from './components/Header';
@@ -32,6 +34,7 @@ import { TermsPage } from './components/TermsPage';
 import { WalletActionPage } from './components/WalletActionPage';
 import { WalletPage } from './components/WalletPage';
 import { useMatchmakingSocket } from './hooks/useMatchmakingSocket';
+import type { AdminDepositRecord } from './shared/admin';
 import {
   AVATAR_IDS,
   createPersonalMatchRecordFromRoom,
@@ -63,9 +66,11 @@ const ACTIVE_SESSION_KEY = 'ludobridge.activeSession';
 const HOSTED_ROOMS_KEY = 'ludobridge.hostedRooms';
 const MY_ROOMS_KEY = 'ludobridge.myRooms';
 const DEDUCTED_FEES_KEY = 'ludobridge.deductedFees';
+const CREDITED_DEPOSITS_KEY = 'ludobridge.creditedDeposits';
 const WALLET_KEY = 'ludobridge.wallet';
 const PERSONAL_MATCHES_KEY = 'ludobridge.personalMatches';
 const NOTIFICATION_READ_KEY = 'ludobridge.readNotifications';
+const PRE_SEEDED_APPROVED_DEPOSITS = new Set(['DEP-1039', 'DEP-1040']);
 
 interface StoredSession {
   roomCode: string;
@@ -76,6 +81,7 @@ interface ParsedRoute {
   view: AppViewRoute;
   roomCode: string;
   joinCode: string;
+  depositAmount?: number;
 }
 
 const ROUTE_TO_PATH: Record<Exclude<AppViewRoute, 'room'>, string> = {
@@ -83,6 +89,7 @@ const ROUTE_TO_PATH: Record<Exclude<AppViewRoute, 'room'>, string> = {
   lobby: '/lobby',
   wallet: '/wallet',
   'wallet-deposit': '/wallet/deposit',
+  'wallet-deposit-pay': '/wallet/deposit/pay',
   'wallet-withdraw': '/wallet/withdraw',
   profile: '/profile',
   history: '/history',
@@ -120,6 +127,18 @@ function parseRouteFromLocation(): ParsedRoute {
 
   if (pathname === '/lobby' || params.get('autostart') === '1') {
     return { view: 'lobby', roomCode: '', joinCode: '' };
+  }
+  if (pathname === '/wallet/deposit/pay') {
+    const amt = Math.round(Number(params.get('amount') ?? 0));
+    if (Number.isFinite(amt) && amt >= 10 && amt <= 50000) {
+      return {
+        view: 'wallet-deposit-pay',
+        roomCode: '',
+        joinCode: '',
+        depositAmount: amt,
+      };
+    }
+    return { view: 'wallet-deposit', roomCode: '', joinCode: '' };
   }
   if (pathname === '/wallet/deposit') {
     return { view: 'wallet-deposit', roomCode: '', joinCode: '' };
@@ -360,6 +379,30 @@ function readReadNotificationIds(): string[] {
   }
 }
 
+function readCreditedDeposits(): string[] {
+  try {
+    const raw = window.localStorage.getItem(CREDITED_DEPOSITS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCreditedDeposits(ids: string[]): void {
+  try {
+    window.localStorage.setItem(
+      CREDITED_DEPOSITS_KEY,
+      JSON.stringify(ids.slice(-200))
+    );
+  } catch {
+    // ignore storage errors
+  }
+}
+
 function writeReadNotificationIds(ids: string[]): void {
   try {
     window.localStorage.setItem(NOTIFICATION_READ_KEY, JSON.stringify(ids.slice(-100)));
@@ -371,9 +414,14 @@ function writeReadNotificationIds(ids: string[]): void {
 export default function App() {
   const [initialRoute] = useState<ParsedRoute>(() => parseRouteFromLocation());
   const [view, setView] = useState<AppViewRoute>(() => initialRoute.view);
+  const [pendingDepositAmount, setPendingDepositAmount] = useState<number>(
+    () => initialRoute.depositAmount ?? 100
+  );
   const [playerName, setPlayerName] = useState<string>(() => getOrCreatePlayerName());
   const [avatarId, setAvatarId] = useState<AvatarId>(() => getOrCreateAvatarId());
   const [wallet, setWallet] = useState<StoredWallet>(() => readWalletState());
+  const [playerDeposits, setPlayerDeposits] = useState<AdminDepositRecord[]>([]);
+  const creditedDepositsRef = useRef<Set<string>>(new Set(readCreditedDeposits()));
   const [personalMatches, setPersonalMatches] = useState<CompletedMatchRecord[]>(() =>
     readPersonalMatches()
   );
@@ -580,12 +628,75 @@ export default function App() {
     [navigatePath]
   );
 
+  const applyDepositsSnapshot = useCallback(
+    (deposits: AdminDepositRecord[]) => {
+      setPlayerDeposits(deposits);
+      let creditedAny = false;
+      for (const dep of deposits) {
+        if (dep.status !== 'approved') continue;
+        if (PRE_SEEDED_APPROVED_DEPOSITS.has(dep.id)) continue;
+        if (creditedDepositsRef.current.has(dep.id)) continue;
+        creditedDepositsRef.current.add(dep.id);
+        creditedAny = true;
+        handleWalletTransaction({
+          type: 'deposit',
+          amount: dep.amount,
+          note: `UPI Deposit Approved (UTR: ${dep.reference})`,
+        });
+      }
+      if (creditedAny) {
+        writeCreditedDeposits(Array.from(creditedDepositsRef.current));
+      }
+    },
+    [handleWalletTransaction]
+  );
+
+  const syncPlayerDeposits = useCallback(
+    async (targetName = playerName) => {
+      if (!targetName.trim()) return;
+      try {
+        const { deposits } = await fetchPlayerDeposits(targetName);
+        applyDepositsSnapshot(deposits);
+      } catch {
+        // ignore transient network errors
+      }
+    },
+    [applyDepositsSnapshot, playerName]
+  );
+
+  const handleProceedToDepositPay = useCallback(
+    (amount: number) => {
+      const cleanAmount = Math.max(10, Math.round(amount));
+      setPendingDepositAmount(cleanAmount);
+      setView('wallet-deposit-pay');
+      setBannerError(null);
+      playSound('lobbyTransition');
+      navigatePath(`/wallet/deposit/pay?amount=${cleanAmount}`);
+    },
+    [navigatePath]
+  );
+
+  useEffect(() => {
+    void syncPlayerDeposits(playerName);
+  }, [playerName, view, syncPlayerDeposits]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      void syncPlayerDeposits(playerName);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [playerName, syncPlayerDeposits]);
+
   useEffect(() => {
     const onPopState = () => {
       const next = parseRouteFromLocation();
       if (next.view !== 'room') {
         setActiveRoom(null);
         setActivePlayerId(null);
+        if (typeof next.depositAmount === 'number') {
+          setPendingDepositAmount(next.depositAmount);
+        }
         setView(next.view);
       } else if (next.roomCode) {
         const stored = readStoredSession();
@@ -682,6 +793,14 @@ export default function App() {
     onRoomClosed: () => {
       exitRoomToLobby(true);
       setBannerError('The battle room was closed because all players left.');
+    },
+    onDepositUpdated: (payload) => {
+      if (
+        payload.playerName.trim().toLowerCase() ===
+        playerName.trim().toLowerCase()
+      ) {
+        void syncPlayerDeposits(playerName);
+      }
     },
   });
 
@@ -1081,7 +1200,17 @@ export default function App() {
             mode="deposit"
             balance={wallet.balance}
             transactions={wallet.transactions}
+            playerDeposits={playerDeposits}
+            onProceedToDepositPay={handleProceedToDepositPay}
             onTransaction={handleWalletTransaction}
+            onBackToWallet={() => navigateToRoute('wallet')}
+          />
+        ) : view === 'wallet-deposit-pay' ? (
+          <DepositPaymentPage
+            amount={pendingDepositAmount}
+            playerName={playerName}
+            onSubmitted={(deposits) => applyDepositsSnapshot(deposits)}
+            onBackToDeposit={() => navigateToRoute('wallet-deposit')}
             onBackToWallet={() => navigateToRoute('wallet')}
           />
         ) : view === 'wallet-withdraw' ? (
