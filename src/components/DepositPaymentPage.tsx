@@ -190,11 +190,12 @@ export function DepositPaymentPage({
       if (!active) return;
       const rec: AdminDepositRecord = {
         id: `DEP_${Date.now()}`,
+        playerId: playerName,
         playerName,
         amount: safeAmount,
         method: 'Live UPI Gateway',
         reference: 'AUTO_CREDITED',
-        status: 'credited',
+        status: 'approved',
         createdAt: new Date().toISOString(),
         processedAt: new Date().toISOString(),
       };

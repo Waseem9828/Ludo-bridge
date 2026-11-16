@@ -20,10 +20,26 @@ import {
   computeMatchStatus,
   createInitialResultReport,
   validateLudoKingCode,
+  type MatchRoom,
 } from '../shared/matchmaking';
 import { createInitialMockStore, type StoreState } from '../shared/mockStore';
+import { getCachedChallenges, getCachedHubSnapshot } from './matchmakingClient';
+import { mkgChallengeToMatchRoom } from './liveBackendClient';
 
 const ADMIN_FALLBACK_KEY = 'ludobridge.staticStore.v1';
+
+export function getLiveAdminRooms(): MatchRoom[] {
+  const challenges = getCachedChallenges();
+  if (challenges && challenges.length > 0) {
+    return challenges.map(mkgChallengeToMatchRoom);
+  }
+  const hub = getCachedHubSnapshot();
+  const roomsMap = new Map<string, MatchRoom>();
+  for (const r of [...hub.runningBattles, ...hub.openLobbies]) {
+    roomsMap.set(r.code, r);
+  }
+  return Array.from(roomsMap.values());
+}
 
 function readFallbackStore(): StoreState {
   try {
@@ -55,7 +71,17 @@ function writeFallbackStore(store: StoreState): void {
 
 function buildFallbackSnapshot(store: StoreState): AdminDashboardSnapshot {
   const admin: AdminStoreState = ensureAdminStore(store.adminState);
-  const rooms = Object.values(store.rooms).sort((a, b) =>
+  const liveRooms = getLiveAdminRooms();
+  const roomsMap = new Map<string, MatchRoom>();
+  for (const r of liveRooms) {
+    roomsMap.set(r.code, r);
+  }
+  for (const r of Object.values(store.rooms)) {
+    if (!roomsMap.has(r.code)) {
+      roomsMap.set(r.code, r);
+    }
+  }
+  const rooms = Array.from(roomsMap.values()).sort((a, b) =>
     b.updatedAt.localeCompare(a.updatedAt)
   );
   const recentMatches = store.recentMatches.slice(0, 50);
@@ -192,29 +218,32 @@ export function controlAdminMatch(
     () => {
       const store = readFallbackStore();
       const admin = ensureAdminStore(store.adminState);
-      const room = store.rooms[code];
+      const liveRooms = getLiveAdminRooms();
+      const room = store.rooms[code] || liveRooms.find((r) => r.code === code);
       if (!room) throw new Error('Match room not found.');
+      store.rooms[code] = { ...room };
+      const targetRoom = store.rooms[code];
       const now = new Date().toISOString();
 
       if (payload.action === 'cancel_refund') {
         delete store.rooms[code];
       } else if (payload.action === 'reset_round') {
-        store.rooms[code] = applyRematchReset(room, now);
+        store.rooms[code] = applyRematchReset(targetRoom, now);
       } else if (payload.action === 'set_lk_code') {
         const check = validateLudoKingCode(payload.ludoKingRoomCode ?? '');
         if (!check.valid) throw new Error(check.error);
-        room.ludoKingRoomCode = check.value;
-        room.updatedAt = now;
-        room.status = computeMatchStatus(room);
+        targetRoom.ludoKingRoomCode = check.value;
+        targetRoom.updatedAt = now;
+        targetRoom.status = computeMatchStatus(targetRoom);
       } else if (payload.action === 'declare_winner') {
-        const winner = room.players.find((p) => p.id === payload.winnerId);
+        const winner = targetRoom.players.find((p) => p.id === payload.winnerId);
         if (!winner) throw new Error('Selected winner not found.');
-        room.winnerId = winner.id;
-        room.winnerName = winner.name;
-        room.status = 'completed';
-        room.updatedAt = now;
-        room.resultReport = {
-          ...(room.resultReport ?? createInitialResultReport(room, winner.id, winner.id, now)),
+        targetRoom.winnerId = winner.id;
+        targetRoom.winnerName = winner.name;
+        targetRoom.status = 'completed';
+        targetRoom.updatedAt = now;
+        targetRoom.resultReport = {
+          ...(targetRoom.resultReport ?? createInitialResultReport(targetRoom, winner.id, winner.id, now)),
           winnerConfirmed: true,
           loserConfirmed: true,
           disputedByPlayerId: null,
@@ -223,22 +252,22 @@ export function controlAdminMatch(
         };
         store.recentMatches.unshift({
           id: `rec-${Date.now().toString(36)}`,
-          lobbyCode: room.code,
-          mode: room.mode,
-          amount: room.amount,
-          stakesLabel: room.stakesLabel,
-          bestOf: room.bestOf,
-          player1Name: room.players[0].name,
-          player1Color: room.players[0].color,
-          player2Name: room.players[1].name,
-          player2Color: room.players[1].color,
+          lobbyCode: targetRoom.code,
+          mode: targetRoom.mode,
+          amount: targetRoom.amount,
+          stakesLabel: targetRoom.stakesLabel,
+          bestOf: targetRoom.bestOf,
+          player1Name: targetRoom.players[0]?.name || 'Host',
+          player1Color: targetRoom.players[0]?.color || 'Red',
+          player2Name: targetRoom.players[1]?.name || 'Opponent',
+          player2Color: targetRoom.players[1]?.color || 'Green',
           winnerName: winner.name,
-          ludoKingRoomCode: room.ludoKingRoomCode,
-          roundNumber: room.roundNumber,
+          ludoKingRoomCode: targetRoom.ludoKingRoomCode,
+          roundNumber: targetRoom.roundNumber,
           completedAt: now,
         });
         const { winnerPayout } = calculateMatchCommission(
-          room.amount,
+          targetRoom.amount,
           admin.settings.commissionPct
         );
         admin.players = admin.players.map((p) =>

@@ -94,7 +94,7 @@ export function ReferralPage({
           }
         }
         if (wallet) {
-          setLiveReferralBalance(wallet.winningCash || 0);
+          setLiveReferralBalance(wallet.winWallet || 0);
         }
         if (Array.isArray(history)) {
           setLiveHistory(history);
@@ -225,7 +225,7 @@ export function ReferralPage({
                 ])
                   .then(([p, w]) => {
                     if (p) setProfileData(p);
-                    if (w) setLiveReferralBalance(w.winningCash || 0);
+                    if (w) setLiveReferralBalance(w.winWallet || 0);
                   })
                   .finally(() => setLoading(false));
               }

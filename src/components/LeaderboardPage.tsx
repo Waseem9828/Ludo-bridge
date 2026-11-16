@@ -55,9 +55,9 @@ export function LeaderboardPage({
     ])
       .then(([wallet, profile]) => {
         if (wallet) {
-          setLiveWinningBalance(wallet.winningCash ?? wallet.wallet ?? 0);
+          setLiveWinningBalance(wallet.winWallet ?? wallet.wallet ?? 0);
         } else if (profile) {
-          setLiveWinningBalance(profile.winningCash ?? profile.wallet ?? 0);
+          setLiveWinningBalance((profile as any).winWallet ?? profile.wallet ?? 0);
         }
       })
       .catch(() => {})

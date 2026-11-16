@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminPanelPage } from './components/AdminPanelPage';
 import { fetchPlayerDeposits } from './api/adminClient';
-import { fetchLiveWallet } from './api/liveBackendClient';
+import { fetchLiveWallet, requestLiveChallenges } from './api/liveBackendClient';
 import {
   fetchCurrentAuthUser,
   logoutAuthSession,
@@ -652,14 +652,16 @@ export default function App() {
     (replace = false) => {
       setActiveRoom(null);
       setActivePlayerId(null);
-      setView('lobby');
-      if (!replace) {
-        playSound('lobbyTransition');
-      }
       writeStoredSession(null);
-      navigatePath('/lobby', replace);
+      setView((prev) => (prev === 'admin' ? 'admin' : 'lobby'));
+      if (view !== 'admin') {
+        if (!replace) {
+          playSound('lobbyTransition');
+        }
+        navigatePath('/lobby', replace);
+      }
     },
-    [navigatePath]
+    [navigatePath, view]
   );
 
   const applyDepositsSnapshot = useCallback(
@@ -736,8 +738,9 @@ export default function App() {
         const stored = readStoredSession();
         if (stored && stored.roomCode === next.roomCode) {
           fetchRoom(next.roomCode)
-            .then(({ room }) => {
-              const matched = room.players.find((p) => p.id === stored.playerId);
+            .then((res) => {
+              const room = res?.room || res;
+              const matched = room?.players?.find((p) => p.id === stored.playerId);
               if (matched) {
                 setActiveRoom(room);
                 setActivePlayerId(matched.id);
@@ -774,7 +777,9 @@ export default function App() {
     if (initialRoute.joinCode) {
       const currentName = getOrCreatePlayerName();
       fetchRoom(initialRoute.joinCode)
-        .then(async ({ room: fetched }) => {
+        .then(async (res) => {
+          const fetched = res?.room || res;
+          if (!fetched) throw new Error('Battle room not found.');
           const existingPid = findParticipantPlayerId(
             fetched,
             { ...readMyRooms(), ...readHostedRooms() },
@@ -783,7 +788,11 @@ export default function App() {
           if (existingPid) {
             return { room: fetched, playerId: existingPid };
           }
-          return joinLobby(initialRoute.joinCode!, currentName);
+          const joinedRes = await joinLobby(initialRoute.joinCode!, currentName);
+          return {
+            room: joinedRes.room || joinedRes,
+            playerId: joinedRes.playerId || authSession?.user?.id || 'guest',
+          };
         })
         .then(({ room, playerId }) => {
           if (!mounted) return;
@@ -803,12 +812,18 @@ export default function App() {
       const currentName = getOrCreatePlayerName();
       const combinedIds = { ...readMyRooms(), ...readHostedRooms() };
       fetchRoom(initialRoute.roomCode)
-        .then(({ room }) => {
+        .then((res) => {
           if (!mounted) return;
+          const room = res?.room || res;
+          if (!room || !room.code) {
+            exitRoomToLobby(true);
+            setRestoringRoom(false);
+            return;
+          }
           const storedPid =
             stored && stored.roomCode === room.code ? stored.playerId : null;
           const matchedPlayerId =
-            (storedPid && room.players.some((p) => p.id === storedPid)
+            (storedPid && room.players?.some((p) => p.id === storedPid)
               ? storedPid
               : null) ?? findParticipantPlayerId(room, combinedIds, currentName);
           if (matchedPlayerId) {
@@ -839,11 +854,24 @@ export default function App() {
       setLoadingHub(false);
     },
     onRoomUpdated: (room) => {
-      setActiveRoom(room);
+      setActiveRoom((prev) => {
+        if (prev && prev.code === room.code) {
+          return room;
+        }
+        return prev;
+      });
     },
-    onRoomClosed: () => {
-      exitRoomToLobby(true);
-      setBannerError('The battle room was closed because all players left.');
+    onRoomClosed: (closedCode) => {
+      if (view === 'room') {
+        setActiveRoom((prev) => {
+          if (prev && (!closedCode || prev.code === closedCode)) {
+            exitRoomToLobby(true);
+            setBannerError('The battle room was closed because all players left.');
+            return null;
+          }
+          return prev;
+        });
+      }
     },
     onDepositUpdated: (payload) => {
       if (
@@ -988,12 +1016,17 @@ export default function App() {
       throw new Error(eligibility.error);
     }
 
-    const { room, playerId } = await createLobby({
+    const res = await createLobby({
       amount,
       playerName,
       visibility: 'open',
       mode: 'Classic',
     });
+    const room = res?.room || res;
+    const playerId = res?.playerId || authSession?.user?.id || room?.players?.[0]?.id || 'host';
+    if (!room || !room.code) {
+      throw new Error('Could not create battle room. Please try again.');
+    }
     updateHostedRooms((prev) => ({
       ...prev,
       [room.code]: playerId,
@@ -1007,9 +1040,13 @@ export default function App() {
   };
 
   const handleJoinLobby = async (code: string) => {
+    const fetchedResult = await fetchRoom(code).catch(() => null);
     const targetRoom =
       hub.openLobbies.find((r) => r.code === code) ??
-      (await fetchRoom(code)).room;
+      (fetchedResult?.room || fetchedResult);
+    if (!targetRoom || !targetRoom.code) {
+      throw new Error('Battle room not found or closed.');
+    }
     const combinedIds = { ...myRooms, ...hostedRooms };
     const existingParticipantId = findParticipantPlayerId(
       targetRoom,
@@ -1037,7 +1074,12 @@ export default function App() {
       throw new Error(eligibility.error);
     }
 
-    const { room, playerId } = await joinLobby(code, playerName);
+    const joinRes = await joinLobby(code, playerName);
+    const room = joinRes?.room || joinRes;
+    const playerId = joinRes?.playerId || authSession?.user?.id || room?.players?.[1]?.id || 'guest';
+    if (!room || !room.code) {
+      throw new Error('Unable to join battle room.');
+    }
     deductEntryFeeOnce(room);
     updateMyRooms((prev) => ({
       ...prev,
@@ -1201,7 +1243,19 @@ export default function App() {
   }, [authSession?.token, handleSaveAvatar, handleSavePlayerName]);
 
   if (view === 'admin') {
-    return <AdminPanelPage onExitAdmin={() => navigateToRoute('home')} />;
+    return (
+      <AdminPanelPage
+        onExitAdmin={() => navigateToRoute('home')}
+        hubSnapshot={hub}
+        authToken={authSession?.token ?? null}
+        onRefreshBattles={() => {
+          if (authSession?.user?.id) {
+            requestLiveChallenges(authSession.user.id);
+          }
+          return fetchHubSnapshot().then(setHub);
+        }}
+      />
+    );
   }
 
   if (view === 'login') {

@@ -42,6 +42,7 @@ import {
   waivePenaltyAction,
 } from '../api/adminClient';
 import {
+  calculateAdminEarnings,
   calculateMatchCommission,
   resolvePlayerLevelFromXp,
   type AdminDashboardSnapshot,
@@ -55,6 +56,7 @@ import {
 import {
   formatLudoKingCode,
   isBattleResultPendingApproval,
+  type HubSnapshot,
   type MatchRoom,
 } from '../shared/matchmaking';
 
@@ -70,6 +72,9 @@ type AdminTab =
 
 interface AdminPanelPageProps {
   onExitAdmin: () => void;
+  hubSnapshot?: HubSnapshot;
+  authToken?: string | null;
+  onRefreshBattles?: () => Promise<void> | void;
 }
 
 const PENALTY_PRESETS = [
@@ -87,7 +92,12 @@ function formatDateTime(iso?: string): string {
   return `${d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} · ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
-export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
+export function AdminPanelPage({
+  onExitAdmin,
+  hubSnapshot,
+  authToken,
+  onRefreshBattles,
+}: AdminPanelPageProps) {
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<AdminDashboardSnapshot | null>(null);
@@ -95,6 +105,35 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Sync live battles from user-side API into admin panel rooms
+  useEffect(() => {
+    if (!hubSnapshot) return;
+    const liveRooms = [
+      ...hubSnapshot.runningBattles,
+      ...hubSnapshot.openLobbies,
+    ];
+    setSnapshot((prev) => {
+      if (!prev) return prev;
+      const map = new Map<string, MatchRoom>();
+      for (const r of liveRooms) {
+        map.set(r.code, r);
+      }
+      for (const r of prev.rooms) {
+        if (!map.has(r.code)) {
+          map.set(r.code, r);
+        }
+      }
+      const updatedRooms = Array.from(map.values()).sort((a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt)
+      );
+      return {
+        ...prev,
+        rooms: updatedRooms,
+        earnings: calculateAdminEarnings(updatedRooms, prev.recentMatches, prev.admin),
+      };
+    });
+  }, [hubSnapshot]);
 
   // Filters & search
   const [matchFilter, setMatchFilter] = useState<
@@ -929,13 +968,31 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
                   </div>
 
                   <section className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-                    <div className="border-b border-slate-200 px-5 py-3.5 flex items-center justify-between">
-                      <h2 className="font-display text-sm font-bold text-slate-900">
-                        Live &amp; Active Rooms ({filteredRooms.length})
-                      </h2>
-                      <span className="text-xs text-slate-500">
-                        Direct override: declare winner, edit LK code, reset, or cancel &amp; refund
-                      </span>
+                    <div className="border-b border-slate-200 px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <h2 className="font-display text-sm font-bold text-slate-900">
+                          Live &amp; Active Rooms ({filteredRooms.length})
+                        </h2>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 border border-emerald-200">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          Live Connected
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {onRefreshBattles && (
+                          <button
+                            type="button"
+                            onClick={() => void onRefreshBattles()}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-xs"
+                          >
+                            <RefreshCw className="h-3 w-3 text-slate-500" />
+                            <span>Refresh Battles</span>
+                          </button>
+                        )}
+                        <span className="hidden sm:inline text-xs text-slate-500">
+                          Direct override: declare winner, edit LK code, reset, or cancel &amp; refund
+                        </span>
+                      </div>
                     </div>
 
                     {filteredRooms.length === 0 ? (

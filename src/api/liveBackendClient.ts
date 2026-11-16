@@ -2,6 +2,7 @@ import { io, type Socket } from 'socket.io-client';
 import type {
   HubSnapshot,
   MatchRoom,
+  MatchResultReport,
   LudoMode,
   TokenColor,
   StakesLabel,
@@ -117,6 +118,44 @@ export function mkgChallengeToMatchRoom(challenge: MkgChallenge): MatchRoom {
   const winnerId = winnerCreator ? challenge.creator?._id : (winnerPlayer ? challenge.player?._id : null);
   const winnerName = winnerCreator ? challenge.creator?.username : (winnerPlayer ? challenge.player?.username : null);
 
+  const hasDispute =
+    challenge.state === 'hold' ||
+    challenge.state === 'adminHold' ||
+    (challenge.results?.creator?.result === 'win' && challenge.results?.player?.result === 'win') ||
+    Boolean(challenge.results?.creator?.reason || challenge.results?.player?.reason);
+
+  const resultReport: MatchResultReport | undefined = (hasDispute || winnerCreator || winnerPlayer)
+    ? {
+        reportedWinnerId: winnerId || challenge.creator?._id || 'unknown',
+        reportedWinnerName: winnerName || challenge.creator?.username || 'Host',
+        reportedByPlayerId: winnerCreator
+          ? challenge.creator?._id || ''
+          : (winnerPlayer ? challenge.player?._id || '' : challenge.creator?._id || ''),
+        reportedByPlayerName: winnerCreator
+          ? challenge.creator?.username || 'Host'
+          : (winnerPlayer ? challenge.player?.username || 'Opponent' : challenge.creator?.username || 'Host'),
+        reportedAt: challenge.createdAt || new Date().toISOString(),
+        winnerConfirmed: Boolean(winnerCreator || winnerPlayer),
+        winnerConfirmedAt: (winnerCreator || winnerPlayer) ? (challenge.createdAt || new Date().toISOString()) : null,
+        loserConfirmed:
+          (winnerCreator && challenge.results?.player?.result === 'lost') ||
+          (winnerPlayer && challenge.results?.creator?.result === 'lost'),
+        loserConfirmedAt:
+          ((winnerCreator && challenge.results?.player?.result === 'lost') ||
+           (winnerPlayer && challenge.results?.creator?.result === 'lost')) ? (challenge.createdAt || new Date().toISOString()) : null,
+        winnerScreenshot:
+          challenge.results?.creator?.screenshot || challenge.results?.player?.screenshot || null,
+        disputedByPlayerId: hasDispute
+          ? (challenge.player?._id || challenge.creator?._id || 'disputed')
+          : null,
+        disputeReason: hasDispute
+          ? (challenge.results?.creator?.reason || challenge.results?.player?.reason || 'Result disputed by opponent')
+          : null,
+        adminApprovedAt:
+          challenge.state === 'closed' ? (challenge.createdAt || new Date().toISOString()) : null,
+      }
+    : undefined;
+
   return {
     code: challenge._id,
     visibility: 'open',
@@ -134,6 +173,7 @@ export function mkgChallengeToMatchRoom(challenge: MkgChallenge): MatchRoom {
     roundNumber: 1,
     messages: [],
     entryFeeDeducted: challenge.state === 'playing' || challenge.state === 'closed',
+    resultReport,
   };
 }
 

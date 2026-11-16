@@ -232,12 +232,14 @@ export async function submitPlayerWithdrawalRequest(params: {
 
   const withdrawal: AdminWithdrawalRecord = {
     id: `WTH-${Date.now().toString(36).toUpperCase()}`,
+    playerId: params.playerName,
     playerName: params.playerName,
     amount: params.amount,
-    payoutMode: 'upi',
-    payoutAddress: params.upiId,
+    feeAmount: 0,
+    netPayable: params.amount,
+    upiId: params.upiId,
     status: 'pending',
-    submittedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
   };
 
   return {

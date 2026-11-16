@@ -62,13 +62,17 @@ export function useMatchmakingSocket({
       onStream: (challenge: MkgChallenge) => {
         if (!active) return;
         const { snapshot, room } = updateSingleCachedChallenge(challenge);
-        callbacksRef.current.onRoomUpdated(room);
+        if (roomCode && room.code === roomCode) {
+          callbacksRef.current.onRoomUpdated(room);
+        }
         callbacksRef.current.onHubSnapshot(snapshot);
       },
       onDeleteChallenge: (id: string) => {
         if (!active) return;
         const snapshot = removeCachedChallenge(id);
-        callbacksRef.current.onRoomClosed(id);
+        if (roomCode && id === roomCode) {
+          callbacksRef.current.onRoomClosed(id);
+        }
         callbacksRef.current.onHubSnapshot(snapshot);
       },
       onWallet: (walletData: any) => {
