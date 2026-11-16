@@ -1275,6 +1275,7 @@ export default function App() {
             currentPlayerId={activePlayerId}
             currentPlayerAvatarId={avatarId}
             wsConnected={wsConnected}
+            authToken={authSession?.token ?? null}
             onSubmitLudoCode={async (lkCode) => {
               const { room } = await submitLudoKingCode(
                 activeRoom.code,
@@ -1404,6 +1405,8 @@ export default function App() {
             avatarId={avatarId}
             hub={hub}
             onOpenProfile={() => navigateToRoute('profile')}
+            authToken={authSession?.token ?? null}
+            walletBalance={wallet.balance}
           />
         ) : view === 'referral' ? (
           <ReferralPage

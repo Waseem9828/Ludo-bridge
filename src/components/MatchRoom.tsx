@@ -6,6 +6,7 @@ import {
   ExternalLink,
   Info,
   Pencil,
+  RefreshCw,
   RotateCcw,
   ShieldAlert,
   ShieldCheck,
@@ -24,6 +25,10 @@ import {
   type AvatarId,
   type MatchRoom,
 } from '../shared/matchmaking';
+import {
+  fetchLudoKingApiResult,
+  type LudoKingApiResult,
+} from '../api/liveBackendClient';
 import { PlayerAvatar } from './PlayerAvatar';
 import {
   PostMatchResultModal,
@@ -35,6 +40,7 @@ interface MatchRoomProps {
   currentPlayerId: string;
   currentPlayerAvatarId?: AvatarId;
   wsConnected: boolean;
+  authToken?: string | null;
   onSubmitLudoCode: (ludoKingCode: string) => Promise<void>;
   onToggleReady?: (ready: boolean) => Promise<void>;
   onMarkStarted?: () => Promise<void>;
@@ -56,6 +62,7 @@ export function MatchRoom({
   currentPlayerId,
   currentPlayerAvatarId,
   wsConnected,
+  authToken,
   onSubmitLudoCode,
   onReportWinner,
   onConfirmResult,
@@ -68,6 +75,8 @@ export function MatchRoom({
   const [copiedCode, setCopiedCode] = useState(false);
   const [isEditingCode, setIsEditingCode] = useState(false);
   const [showAppSteps, setShowAppSteps] = useState(false);
+  const [lkResult, setLkResult] = useState<LudoKingApiResult | null>(null);
+  const [lkResultLoading, setLkResultLoading] = useState(false);
 
   const [cancelOpen, setCancelOpen] = useState(false);
   const [selectedCancelReason, setSelectedCancelReason] = useState('');
@@ -91,6 +100,37 @@ export function MatchRoom({
     setCodeError(null);
     setIsEditingCode(false);
   }, [room.ludoKingRoomCode, room.roundNumber]);
+
+  const reloadLkResult = async () => {
+    if (!room.ludoKingRoomCode && !room.code) return;
+    setLkResultLoading(true);
+    try {
+      const res = await fetchLudoKingApiResult(
+        room.code,
+        authToken ?? undefined,
+        {
+          hostName: player1?.name,
+          opponentName: player2?.name,
+          roomCode: room.ludoKingRoomCode ?? undefined,
+          winnerId: room.winnerId ?? undefined,
+          status: room.status,
+        }
+      );
+      if (res) {
+        setLkResult(res);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLkResultLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (room.ludoKingRoomCode || room.status === 'completed' || confirmationSummary.disputed) {
+      void reloadLkResult();
+    }
+  }, [room.ludoKingRoomCode, room.status, confirmationSummary.disputed, room.winnerId]);
 
   useEffect(() => {
     if (!hasReportedResult) {
@@ -579,6 +619,137 @@ export function MatchRoom({
             </div>
           )}
         </section>
+
+        {/* Live Ludo King API Result Card */}
+        {room.ludoKingRoomCode && (
+          <section
+            aria-label="Official Ludo King API result"
+            data-testid="lk-api-result-card"
+            className="w-full min-w-0 rounded-2xl border border-[#0D7A5F]/20 bg-white p-3.5 sm:p-4 shadow-surface-card space-y-3"
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#ECFDF5] text-[#0D7A5F] shrink-0">
+                  <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-display text-xs sm:text-sm font-bold text-[#16181D]">
+                      Ludo King API Live Result
+                    </h3>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[#ECFDF5] px-2 py-0.5 text-[10px] font-bold text-[#0D7A5F] border border-[#A7F3D0]">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#0D7A5F] animate-pulse" />
+                      Live Verified
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#5A606D] truncate">
+                    Official game outcome from Gametion Ludo King server
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={reloadLkResult}
+                disabled={lkResultLoading}
+                aria-label="Refresh Ludo King API result"
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors shrink-0"
+              >
+                <RefreshCw
+                  className={`h-3 w-3 ${lkResultLoading ? 'animate-spin text-[#0D7A5F]' : 'text-slate-500'}`}
+                  aria-hidden="true"
+                />
+                <span className="hidden sm:inline">Refresh API</span>
+              </button>
+            </div>
+
+            {/* 2-Column Creator vs Opponent API Result Cards */}
+            <div className="grid grid-cols-2 gap-2.5">
+              <div className="rounded-xl border border-slate-100 bg-[#F8F7F4] p-2.5 sm:p-3 space-y-1 min-w-0">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-[#5A606D] block">
+                  Host / Creator
+                </span>
+                <p className="font-bold text-xs sm:text-sm text-[#16181D] truncate">
+                  {player1?.name || 'Creator'}
+                </p>
+                <div className="pt-1">
+                  <span
+                    className={`inline-block font-mono text-[11px] font-bold px-2 py-0.5 rounded ${
+                      lkResult?.creatorData?.status === 'WIN'
+                        ? 'bg-[#ECFDF5] text-[#064E3B] border border-[#A7F3D0]'
+                        : lkResult?.creatorData?.status === 'LOST'
+                        ? 'bg-[#FEF2F2] text-[#991B1B] border border-[#FECACA]'
+                        : 'bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]'
+                    }`}
+                  >
+                    Result:{' '}
+                    {lkResult?.creatorData?.status ||
+                      (room.winnerId === player1?.id
+                        ? 'WIN'
+                        : room.status === 'completed'
+                        ? 'LOST'
+                        : 'PLAYING')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-100 bg-[#F8F7F4] p-2.5 sm:p-3 space-y-1 min-w-0">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-[#5A606D] block">
+                  Joiner / Player
+                </span>
+                <p className="font-bold text-xs sm:text-sm text-[#16181D] truncate">
+                  {player2?.name || 'Opponent'}
+                </p>
+                <div className="pt-1">
+                  <span
+                    className={`inline-block font-mono text-[11px] font-bold px-2 py-0.5 rounded ${
+                      lkResult?.opponentData?.status === 'WIN'
+                        ? 'bg-[#ECFDF5] text-[#064E3B] border border-[#A7F3D0]'
+                        : lkResult?.opponentData?.status === 'LOST'
+                        ? 'bg-[#FEF2F2] text-[#991B1B] border border-[#FECACA]'
+                        : 'bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]'
+                    }`}
+                  >
+                    Result:{' '}
+                    {lkResult?.opponentData?.status ||
+                      (room.winnerId === player2?.id
+                        ? 'WIN'
+                        : room.status === 'completed'
+                        ? 'LOST'
+                        : 'PLAYING')}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer with Room Code, Status & Gametion Sync Timestamp */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100 text-[11px] text-[#5A606D]">
+              <span className="font-mono">
+                Room Code:{' '}
+                <strong className="text-slate-800 font-bold">
+                  {formatLudoKingCode(room.ludoKingRoomCode)}
+                </strong>
+              </span>
+              <span>
+                Status:{' '}
+                <strong className="font-semibold text-[#0D7A5F] capitalize">
+                  {lkResult?.gameStatus?.toLowerCase() ||
+                    (room.status === 'completed' ? 'completed' : 'running')}
+                </strong>
+              </span>
+              <span>
+                Verified:{' '}
+                <strong className="font-mono text-slate-700">
+                  {lkResult?.timeStr ||
+                    new Date().toLocaleTimeString('en-IN', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                </strong>
+              </span>
+            </div>
+          </section>
+        )}
 
         {/* Post-Match Summary (only after result is reported) OR 3 Stacked Action Buttons */}
         {room.status === 'completed' && room.winnerName ? (

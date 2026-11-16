@@ -49,6 +49,10 @@ import {
   type AdminSystemSettings,
 } from '../shared/admin';
 import {
+  fetchLudoKingApiResult,
+  type LudoKingApiResult,
+} from '../api/liveBackendClient';
+import {
   formatLudoKingCode,
   isBattleResultPendingApproval,
   type MatchRoom,
@@ -128,6 +132,32 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
 
   const [levelsDraft, setLevelsDraft] = useState<AdminLevelConfig[]>([]);
   const [settingsDraft, setSettingsDraft] = useState<AdminSystemSettings | null>(null);
+
+  const [lkModalRoom, setLkModalRoom] = useState<MatchRoom | null>(null);
+  const [lkModalResult, setLkModalResult] = useState<LudoKingApiResult | null>(null);
+  const [lkModalLoading, setLkModalLoading] = useState(false);
+
+  const handleOpenLkResult = async (room: MatchRoom) => {
+    setLkModalRoom(room);
+    setLkModalLoading(true);
+    setLkModalResult(null);
+    try {
+      const p1 = room.players[0];
+      const p2 = room.players[1];
+      const res = await fetchLudoKingApiResult(room.code, undefined, {
+        hostName: p1?.name,
+        opponentName: p2?.name,
+        roomCode: room.ludoKingRoomCode ?? undefined,
+        winnerId: room.winnerId ?? undefined,
+        status: room.status,
+      });
+      setLkModalResult(res);
+    } catch {
+      // ignore
+    } finally {
+      setLkModalLoading(false);
+    }
+  };
 
   const notifySuccess = (msg: string) => {
     setErrorMsg(null);
@@ -997,6 +1027,17 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
                                         >
                                           <ImageIcon className="h-3 w-3" aria-hidden="true" />
                                           <span>Proof</span>
+                                        </button>
+                                      )}
+
+                                      {room.ludoKingRoomCode && (
+                                        <button
+                                          type="button"
+                                          onClick={() => void handleOpenLkResult(room)}
+                                          className="inline-flex min-h-[32px] items-center gap-1 rounded-md border border-[#0D7A5F]/30 bg-[#ECFDF5] px-2.5 py-1 text-[11px] font-bold text-[#0D7A5F] hover:bg-[#D1FAE5] whitespace-nowrap"
+                                        >
+                                          <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                                          <span>LK Result</span>
                                         </button>
                                       )}
 
@@ -2566,6 +2607,143 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
               alt={`Match ${proofPreview.code} winner proof`}
               className="max-h-80 w-full rounded-xl border border-slate-200 object-contain bg-slate-50"
             />
+          </div>
+        </div>
+      )}
+
+      {/* LudoKing Result Modal (matching AdminApp_Decompiled.js) */}
+      {lkModalRoom && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="LudoKing Result"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs"
+        >
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#ECFDF5] text-[#0D7A5F]">
+                  <ShieldCheck className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-display text-base font-bold text-slate-900">
+                    LudoKing Result
+                  </h3>
+                  <p className="text-[11px] text-slate-500 font-mono">
+                    Room Code: {lkModalRoom.ludoKingRoomCode || lkModalRoom.code}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLkModalRoom(null)}
+                aria-label="Close modal"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:text-slate-900"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            {lkModalLoading ? (
+              <div className="py-8 text-center text-xs text-slate-500 space-y-2">
+                <RefreshCw className="h-5 w-5 animate-spin mx-auto text-[#0D7A5F]" />
+                <span>Fetching live result from Gametion servers...</span>
+              </div>
+            ) : lkModalResult ? (
+              <div className="space-y-3.5 text-xs">
+                {/* Creator Data */}
+                <div className="rounded-xl bg-slate-50 p-3 space-y-1.5 border border-slate-200">
+                  <h4 className="font-bold text-slate-900 uppercase text-[10px] tracking-wider text-slate-500">
+                    Creator's Data
+                  </h4>
+                  <p className="text-slate-800">
+                    <strong className="font-semibold text-slate-900">creator Result: </strong>
+                    <span className={`font-mono font-bold px-1.5 py-0.5 rounded text-[11px] ${
+                      lkModalResult.creatorData?.status === 'WIN'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : lkModalResult.creatorData?.status === 'LOST'
+                        ? 'bg-rose-100 text-rose-800'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {lkModalResult.creatorData?.status || 'N/A'}
+                    </span>
+                  </p>
+                  <p className="text-slate-600">
+                    Date: {lkModalResult.dateStr || 'N/A'}
+                  </p>
+                  <p className="text-slate-600">
+                    Time: {lkModalResult.timeStr || 'N/A'}
+                  </p>
+                  <p className="text-slate-600">
+                    Game Status: <strong className="font-semibold text-slate-900">{lkModalResult.gameStatus}</strong>
+                  </p>
+                </div>
+
+                {/* Player Data */}
+                <div className="rounded-xl bg-slate-50 p-3 space-y-1.5 border border-slate-200">
+                  <h4 className="font-bold text-slate-900 uppercase text-[10px] tracking-wider text-slate-500">
+                    player's Data
+                  </h4>
+                  <p className="text-slate-800">
+                    <strong className="font-semibold text-slate-900">Player Result: </strong>
+                    <span className={`font-mono font-bold px-1.5 py-0.5 rounded text-[11px] ${
+                      lkModalResult.opponentData?.status === 'WIN'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : lkModalResult.opponentData?.status === 'LOST'
+                        ? 'bg-rose-100 text-rose-800'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {lkModalResult.opponentData?.status || 'N/A'}
+                    </span>
+                  </p>
+                </div>
+
+                {/* Instant Dispute Settlement */}
+                <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
+                  <p className="text-[11px] font-semibold text-slate-600">
+                    Resolve Dispute via LK API:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {lkModalRoom.players[0] && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const p1 = lkModalRoom.players[0];
+                          await runAdminMutation(
+                            `lk-win-p1-${lkModalRoom.code}`,
+                            () => controlAdminMatch(lkModalRoom.code, { action: 'declare_winner', winnerId: p1.id }),
+                            `Confirmed ${p1.name} as winner via LK API.`
+                          );
+                          setLkModalRoom(null);
+                        }}
+                        className="flex-1 min-h-[34px] rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 whitespace-nowrap"
+                      >
+                        Award: {lkModalRoom.players[0].name}
+                      </button>
+                    )}
+                    {lkModalRoom.players[1] && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const p2 = lkModalRoom.players[1];
+                          await runAdminMutation(
+                            `lk-win-p2-${lkModalRoom.code}`,
+                            () => controlAdminMatch(lkModalRoom.code, { action: 'declare_winner', winnerId: p2.id }),
+                            `Confirmed ${p2.name} as winner via LK API.`
+                          );
+                          setLkModalRoom(null);
+                        }}
+                        className="flex-1 min-h-[34px] rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 whitespace-nowrap"
+                      >
+                        Award: {lkModalRoom.players[1].name}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500 text-center py-4">Result not found for this code.</p>
+            )}
           </div>
         </div>
       )}
