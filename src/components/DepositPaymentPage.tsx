@@ -135,6 +135,10 @@ export function DepositPaymentPage({
   onBackToDeposit,
   onBackToWallet,
 }: DepositPaymentPageProps) {
+  const safeAmount = Math.max(10, Math.round(Number(amount) || 0));
+  const isAndroidDevice =
+    typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
+
   const [config, setConfig] = useState<DepositPaymentConfig>({
     upiId: DEFAULT_ADMIN_SETTINGS.depositUpiId || 'ludoleague@ybl',
     merchantName: DEFAULT_ADMIN_SETTINGS.depositMerchantName || 'Ludo league.online',
@@ -205,10 +209,6 @@ export function DepositPaymentPage({
       window.removeEventListener('ludobridge.paymentSuccess', onPaymentSuccess);
     };
   }, [safeAmount, playerName, onSubmitted]);
-
-  const safeAmount = Math.max(10, Math.round(Number(amount) || 0));
-  const isAndroidDevice =
-    typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
 
   const activeQrUri = useMemo(() => {
     if (liveGatewayUrl && (liveGatewayUrl.startsWith('upi://') || liveGatewayUrl.startsWith('https://'))) {
