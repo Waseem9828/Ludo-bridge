@@ -69,7 +69,7 @@ export async function sendAuthOtp(input: {
   referralCode?: string;
 }): Promise<SendOtpResponse> {
   const norm = normalizeIndianMobile(input.mobile);
-  const cleanMobile = norm.valid ? norm.mobile : input.mobile.replace(/\D/g, '').slice(-10);
+  const cleanMobile = norm.valid ? norm.value : input.mobile.replace(/\D/g, '').slice(-10);
 
   if (input.intent === 'signup') {
     const signupRes = await apiRequest('/auth/signup', {
@@ -134,7 +134,7 @@ export async function verifyAuthOtp(input: {
   referralCode?: string;
 }): Promise<VerifyOtpResponse> {
   const norm = normalizeIndianMobile(input.mobile);
-  const cleanMobile = norm.valid ? norm.mobile : input.mobile.replace(/\D/g, '').slice(-10);
+  const cleanMobile = norm.valid ? norm.value : input.mobile.replace(/\D/g, '').slice(-10);
 
   const res = await apiRequest('/auth/confirmOTP', {
     method: 'POST',

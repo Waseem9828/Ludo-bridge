@@ -102,9 +102,6 @@ export function LoginPage({
     }
   };
 
-  const activeChannelLabel =
-    (deliveryInfo?.channel ?? channel) === 'whatsapp' ? 'WhatsApp' : 'SMS';
-
   return (
     <div
       data-testid="login-page"
