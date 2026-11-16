@@ -2056,8 +2056,37 @@ async function startServer() {
     });
   });
 
-  app.use('/api', (_req, res) => {
-    res.status(404).json({ error: 'API endpoint not found.' });
+  // Forward any unhandled /api calls directly to live MKG backend
+  app.all('/api/*', async (req, res) => {
+    const targetPath = (req.params as any)[0] || req.path.replace(/^\/api\/?/, '');
+    const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    const targetUrl = `https://apiv2.mkgplayers.com/api/${targetPath}${query}`;
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': (req.headers['content-type'] as string) || 'application/json',
+        'Origin': 'https://mkgplayers.com',
+        'Host': 'apiv2.mkgplayers.com',
+      };
+      if (req.headers.authorization) headers['Authorization'] = String(req.headers.authorization);
+      if (req.headers['x-auth-token']) headers['Authorization'] = String(req.headers['x-auth-token']);
+
+      const options: RequestInit = {
+        method: req.method,
+        headers,
+      };
+      if (req.method !== 'GET' && req.method !== 'HEAD' && req.body && Object.keys(req.body).length > 0) {
+        options.body = JSON.stringify(req.body);
+      }
+
+      const proxyRes = await fetch(targetUrl, options);
+      const data = await proxyRes.text();
+      res
+        .status(proxyRes.status)
+        .type(proxyRes.headers.get('content-type') || 'application/json')
+        .send(data);
+    } catch (err: any) {
+      res.status(502).json({ error: 'Proxy request failed: ' + err.message });
+    }
   });
 
   const httpServer = http.createServer(app);

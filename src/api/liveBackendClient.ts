@@ -314,10 +314,7 @@ export function registerSocketListeners(listeners: typeof socketListeners): void
 
 export function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
-    if (window.location.hostname.includes('pages.dev') || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
-      return '/api';
-    }
-    return '/api/live';
+    return '/api';
   }
   return 'https://apiv2.mkgplayers.com/api';
 }
@@ -344,6 +341,27 @@ export async function apiRequest<T = any>(
 
   try {
     const res = await fetch(url, { ...options, headers });
+    const contentType = res.headers.get('content-type') || '';
+
+    // If a proxy route returned index.html fallback, fail over to direct live backend URL
+    if (contentType.includes('text/html') && !url.startsWith('https://apiv2.mkgplayers.com')) {
+      const directUrl = `${LIVE_BACKEND_URLS.apiBase}${cleanEndpoint}`;
+      const directRes = await fetch(directUrl, { ...options, headers });
+      const directJson = await directRes.json().catch(() => ({}));
+      if (!directRes.ok) {
+        return {
+          status: directRes.status,
+          data: directJson?.data ?? null,
+          error: directJson?.error || directJson?.message || `Request failed (${directRes.status})`,
+        };
+      }
+      return {
+        status: directJson?.status || directRes.status,
+        data: (directJson?.data !== undefined ? directJson.data : directJson) as T,
+        error: directJson?.error || null,
+      };
+    }
+
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
       return {
@@ -358,6 +376,21 @@ export async function apiRequest<T = any>(
       error: json?.error || null,
     };
   } catch (err: any) {
+    // If relative proxy failed due to network, try direct live backend
+    if (!url.startsWith('https://apiv2.mkgplayers.com')) {
+      try {
+        const directUrl = `${LIVE_BACKEND_URLS.apiBase}${cleanEndpoint}`;
+        const directRes = await fetch(directUrl, { ...options, headers });
+        const directJson = await directRes.json().catch(() => ({}));
+        return {
+          status: directJson?.status || directRes.status,
+          data: (directJson?.data !== undefined ? directJson.data : directJson) as T,
+          error: directJson?.error || null,
+        };
+      } catch {
+        // ignore fallback error
+      }
+    }
     return {
       status: 0,
       data: null as any,
