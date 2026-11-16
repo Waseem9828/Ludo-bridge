@@ -1,18 +1,4 @@
 import {
-  applyRematchReset,
-  applyResultConfirmation,
-  computeMatchStatus,
-  countPlayerActiveBattles,
-  createInitialResultReport,
-  expireStaleOpenBattles,
-  isPlayerSeatedInRoom,
-  MAX_ACTIVE_BATTLES_PER_PLAYER,
-  normalizeLobbyCode,
-  pickOpponentColor,
-  validateBattleAmount,
-  validateLudoKingCode,
-  validatePlayerName,
-  validateWinnerScreenshot,
   type CompletedMatchRecord,
   type HubSnapshot,
   type LobbyVisibility,
@@ -21,612 +7,336 @@ import {
   type StakesLabel,
   type TokenColor,
 } from '../shared/matchmaking';
+import { readStoredAuthSession } from './authClient';
 import {
-  buildHubSnapshotFromStore,
-  createInitialMockStore,
-  type StoreState,
-} from '../shared/mockStore';
+  getOrCreateLiveSocket,
+  mkgChallengeToMatchRoom,
+  mkgChallengesToHubSnapshot,
+  submitLiveMatchCancel,
+  submitLiveMatchLoss,
+  submitLiveMatchWin,
+  type MkgChallenge,
+} from './liveBackendClient';
 
-const STATIC_STORE_KEY = 'ludobridge.staticStore.v1';
-let staticFallbackMode = false;
+let cachedChallenges: MkgChallenge[] = [];
+let cachedHubSnapshot: HubSnapshot = {
+  openLobbies: [],
+  runningBattles: [],
+  recentMatches: [],
+  stats: { openCount: 0, activeMatchesCount: 0, completedCount: 0 },
+};
+
+export function updateCachedChallenges(challenges: MkgChallenge[]): HubSnapshot {
+  cachedChallenges = Array.isArray(challenges) ? challenges : [];
+  cachedHubSnapshot = mkgChallengesToHubSnapshot(cachedChallenges);
+  return cachedHubSnapshot;
+}
+
+export function updateSingleCachedChallenge(challenge: MkgChallenge): {
+  snapshot: HubSnapshot;
+  room: MatchRoom;
+} {
+  const index = cachedChallenges.findIndex((c) => c._id === challenge._id);
+  if (index !== -1) {
+    cachedChallenges[index] = challenge;
+  } else {
+    cachedChallenges = [challenge, ...cachedChallenges];
+  }
+  cachedHubSnapshot = mkgChallengesToHubSnapshot(cachedChallenges);
+  const room = mkgChallengeToMatchRoom(challenge);
+  return { snapshot: cachedHubSnapshot, room };
+}
+
+export function removeCachedChallenge(id: string): HubSnapshot {
+  cachedChallenges = cachedChallenges.filter((c) => c._id !== id);
+  cachedHubSnapshot = mkgChallengesToHubSnapshot(cachedChallenges);
+  return cachedHubSnapshot;
+}
 
 export function isStaticFallbackActive(): boolean {
-  return staticFallbackMode;
+  return false;
 }
 
-function readLocalStore(): StoreState {
-  try {
-    const raw = window.localStorage.getItem(STATIC_STORE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as StoreState;
-      if (parsed && parsed.rooms && Array.isArray(parsed.recentMatches)) {
-        return parsed;
-      }
+export async function fetchHubSnapshot(): Promise<HubSnapshot> {
+  const session = readStoredAuthSession();
+  if (session?.token && session?.user?.id) {
+    const socket = getOrCreateLiveSocket({ token: session.token, userId: session.user.id });
+    if (socket?.connected) {
+      socket.send(JSON.stringify({ type: 'getChallenges', payload: { userId: session.user.id } }));
     }
-  } catch {
-    // ignore storage read issues
   }
-  const fresh = createInitialMockStore();
-  writeLocalStore(fresh);
-  return fresh;
+  return cachedHubSnapshot;
 }
 
-function writeLocalStore(store: StoreState): void {
-  try {
-    window.localStorage.setItem(STATIC_STORE_KEY, JSON.stringify(store));
-  } catch {
-    // ignore storage write issues
+export async function fetchRoom(code: string): Promise<MatchRoom> {
+  const found = cachedChallenges.find((c) => c._id === code);
+  if (found) {
+    return mkgChallengeToMatchRoom(found);
   }
+  return {
+    code,
+    visibility: 'open',
+    mode: 'Classic',
+    amount: 100,
+    stakesLabel: '₹100' as StakesLabel,
+    bestOf: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    status: 'waiting',
+    ludoKingRoomCode: null,
+    players: [],
+    winnerId: null,
+    winnerName: null,
+    roundNumber: 1,
+    messages: [],
+  };
 }
 
-function genLocalCode(rooms: Record<string, MatchRoom>): string {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  for (let attempt = 0; attempt < 20; attempt++) {
-    let code = '';
-    for (let i = 0; i < 6; i++) {
-      code += alphabet[Math.floor(Math.random() * alphabet.length)];
-    }
-    if (!rooms[code]) return code;
-  }
-  return `LB${Math.floor(1000 + Math.random() * 8999)}`;
-}
-
-function genLocalId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
-async function requestJsonWithFallback<T>(
-  url: string,
-  options: RequestInit | undefined,
-  localHandler: () => T | Promise<T>
-): Promise<T> {
-  if (staticFallbackMode) {
-    return await localHandler();
-  }
-
-  try {
-    const response = await fetch(url, {
-      headers: { 'Content-Type': 'application/json' },
-      ...options,
-    });
-    const contentType = response.headers.get('content-type') ?? '';
-    if (!contentType.includes('application/json')) {
-      staticFallbackMode = true;
-      return await localHandler();
-    }
-    const data = (await response.json()) as T & { error?: string };
-    if (!response.ok) {
-      throw new Error(data.error || `Request failed (${response.status})`);
-    }
-    return data;
-  } catch (err) {
-    if (!(err instanceof TypeError) && !(err instanceof SyntaxError)) {
-      throw err;
-    }
-    staticFallbackMode = true;
-    return await localHandler();
-  }
-}
-
-export function fetchHubSnapshot(): Promise<HubSnapshot> {
-  return requestJsonWithFallback<HubSnapshot>('/api/lobbies', undefined, () => {
-    const store = readLocalStore();
-    if (expireStaleOpenBattles(store.rooms, Date.now()).length > 0) {
-      writeLocalStore(store);
-    }
-    return buildHubSnapshotFromStore(store);
-  });
-}
-
-export function fetchRoom(code: string): Promise<{ room: MatchRoom }> {
-  const norm = normalizeLobbyCode(code);
-  return requestJsonWithFallback<{ room: MatchRoom }>(
-    `/api/lobbies/${encodeURIComponent(norm)}`,
-    undefined,
-    () => {
-      const store = readLocalStore();
-      if (expireStaleOpenBattles(store.rooms, Date.now()).length > 0) {
-        writeLocalStore(store);
-      }
-      const room = store.rooms[norm];
-      if (!room) {
-        throw new Error(`Lobby ${norm || 'unknown'} was not found.`);
-      }
-      return { room };
-    }
-  );
-}
-
-export function createLobby(params: {
-  playerName?: string;
-  amount: number;
+export async function createLobby(input: {
+  hostName: string;
+  hostColor?: TokenColor;
   mode?: LudoMode;
-  color?: TokenColor;
   stakesLabel?: StakesLabel;
-  bestOf?: 1 | 3;
+  battleAmount?: number;
   visibility?: LobbyVisibility;
-}): Promise<{ room: MatchRoom; playerId: string }> {
-  return requestJsonWithFallback<{ room: MatchRoom; playerId: string }>(
-    '/api/lobbies',
-    {
-      method: 'POST',
-      body: JSON.stringify(params),
-    },
-    () => {
-      const store = readLocalStore();
-      if (expireStaleOpenBattles(store.rooms, Date.now()).length > 0) {
-        writeLocalStore(store);
-      }
-      const rawName = String(params.playerName ?? '').trim();
-      const nameCheck = rawName
-        ? validatePlayerName(rawName)
-        : { valid: true, value: `Player ${Math.floor(100 + Math.random() * 900)}` };
-      if (!nameCheck.valid) throw new Error(nameCheck.error);
-      if (
-        countPlayerActiveBattles(Object.values(store.rooms), nameCheck.value) >=
-        MAX_ACTIVE_BATTLES_PER_PLAYER
-      ) {
-        throw new Error(
-          `You can keep at most ${MAX_ACTIVE_BATTLES_PER_PLAYER} open/active battles at a time.`
-        );
-      }
-      const amountCheck = validateBattleAmount(params.amount);
-      if (!amountCheck.valid) throw new Error(amountCheck.error);
+  bestOf?: 1 | 3;
+}): Promise<MatchRoom> {
+  const session = readStoredAuthSession();
+  if (!session?.token || !session?.user?.id) {
+    throw new Error('Please login to create a battle.');
+  }
 
-      const now = new Date().toISOString();
-      const code = genLocalCode(store.rooms);
-      const playerId = genLocalId('plr');
-      const room: MatchRoom = {
-        code,
-        visibility: params.visibility ?? 'open',
-        mode: params.mode ?? 'Classic',
-        amount: amountCheck.value,
-        stakesLabel: params.stakesLabel ?? 'Friendly',
-        bestOf: params.bestOf ?? 1,
-        createdAt: now,
-        updatedAt: now,
-        status: 'waiting',
-        ludoKingRoomCode: null,
-        players: [
-          {
-            id: playerId,
-            name: nameCheck.value,
-            color: params.color ?? 'Red',
-            isHost: true,
-            readyInApp: false,
-            connected: true,
-            joinedAt: now,
-          },
-        ],
-        winnerId: null,
-        winnerName: null,
-        roundNumber: 1,
-        messages: [
-          {
-            id: genLocalId('msg'),
-            senderId: 'system',
-            senderName: 'Matchmaker',
-            text: `${nameCheck.value} opened a public 1v1 ${params.mode ?? 'Classic'} lobby.`,
-            kind: 'system',
-            createdAt: now,
-          },
-        ],
-      };
-      store.rooms[code] = room;
-      writeLocalStore(store);
-      return { room, playerId };
-    }
+  const socket = getOrCreateLiveSocket({ token: session.token, userId: session.user.id });
+  if (!socket?.connected) {
+    throw new Error('Live matchmaking server is connecting. Please try again in a moment.');
+  }
+
+  const amount = input.battleAmount || 50;
+  let modeString = 'CLASSIC';
+  if (amount < 50) {
+    modeString = 'POPULAR';
+  } else if (input.mode === 'Quick') {
+    modeString = 'POPULAR';
+  } else if (input.mode === 'Rush') {
+    modeString = 'QUICK';
+  }
+
+  socket.send(
+    JSON.stringify({
+      type: 'create',
+      payload: {
+        amount,
+        userId: session.user.id,
+        username: session.user.name,
+        mode: modeString,
+      },
+    })
   );
-}
 
-export function quickMatch(params: {
-  playerName: string;
-  mode: LudoMode;
-  color: TokenColor;
-  stakesLabel: StakesLabel;
-  bestOf: 1 | 3;
-}): Promise<{ room: MatchRoom; playerId: string; matched: boolean }> {
-  return requestJsonWithFallback<{ room: MatchRoom; playerId: string; matched: boolean }>(
-    '/api/lobbies/quick-match',
-    {
-      method: 'POST',
-      body: JSON.stringify(params),
-    },
-    async () => {
-      const created = await createLobby({
-        playerName: params.playerName,
-        amount: 100,
-        mode: params.mode,
-        color: params.color,
-        stakesLabel: params.stakesLabel,
-        bestOf: params.bestOf,
-        visibility: 'open',
-      });
-      return { ...created, matched: false };
-    }
-  );
-}
-
-export function joinLobby(
-  code: string,
-  playerName: string
-): Promise<{ room: MatchRoom; playerId: string }> {
-  const norm = normalizeLobbyCode(code);
-  return requestJsonWithFallback<{ room: MatchRoom; playerId: string }>(
-    `/api/lobbies/${encodeURIComponent(norm)}/join`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ playerName }),
-    },
-    () => {
-      const store = readLocalStore();
-      if (expireStaleOpenBattles(store.rooms, Date.now()).length > 0) {
-        writeLocalStore(store);
-      }
-      const room = store.rooms[norm];
-      if (!room) throw new Error(`No active battle found for code ${norm || 'entered'}.`);
-      const nameCheck = validatePlayerName(playerName);
-      if (!nameCheck.valid) throw new Error(nameCheck.error);
-      if (
-        countPlayerActiveBattles(Object.values(store.rooms), nameCheck.value) >=
-        MAX_ACTIVE_BATTLES_PER_PLAYER
-      ) {
-        throw new Error(
-          `You already have ${MAX_ACTIVE_BATTLES_PER_PLAYER} active battles. Finish or cancel one before joining another.`
-        );
-      }
-      if (isPlayerSeatedInRoom(room, nameCheck.value)) {
-        throw new Error('You cannot join your own battle as an opponent.');
-      }
-      if (room.players.length >= 2) {
-        throw new Error('This 2-player match room is already full.');
-      }
-
-      const host = room.players[0];
-      const now = new Date().toISOString();
-      const playerId = genLocalId('plr');
-      room.players.push({
-        id: playerId,
-        name: nameCheck.value,
-        color: pickOpponentColor(host.color),
-        isHost: false,
-        readyInApp: false,
+  const optimisticRoom: MatchRoom = {
+    code: `challenge_${Date.now()}`,
+    visibility: input.visibility || 'open',
+    mode: input.mode || 'Classic',
+    amount,
+    stakesLabel: (amount ? `₹${amount}` : 'Friendly') as StakesLabel,
+    bestOf: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    status: 'waiting',
+    ludoKingRoomCode: null,
+    players: [
+      {
+        id: session.user.id,
+        name: session.user.name,
+        color: input.hostColor || 'Red',
+        isHost: true,
+        readyInApp: true,
         connected: true,
-        joinedAt: now,
-      });
-      room.entryFeeDeducted = true;
-      room.updatedAt = now;
-      room.status = computeMatchStatus(room);
-      room.messages.push({
-        id: genLocalId('msg'),
-        senderId: 'system',
-        senderName: 'Matchmaker',
-        text: `${nameCheck.value} joined the match room.`,
-        kind: 'system',
-        createdAt: now,
-      });
-      writeLocalStore(store);
-      return { room, playerId };
-    }
-  );
+        joinedAt: new Date().toISOString(),
+      },
+    ],
+    winnerId: null,
+    winnerName: null,
+    roundNumber: 1,
+    messages: [],
+  };
+
+  return optimisticRoom;
 }
 
-export function submitLudoKingCode(
+export async function joinLobby(input: {
+  code: string;
+  guestName: string;
+  guestColor?: TokenColor;
+  playerId?: string;
+}): Promise<MatchRoom> {
+  const session = readStoredAuthSession();
+  if (!session?.token || !session?.user?.id) {
+    throw new Error('Please login to join a battle.');
+  }
+
+  const socket = getOrCreateLiveSocket({ token: session.token, userId: session.user.id });
+  if (!socket?.connected) {
+    throw new Error('Live matchmaking server is connecting. Please try again in a moment.');
+  }
+
+  const challenge = cachedChallenges.find((c) => c._id === input.code);
+  const amount = challenge?.amount || 50;
+
+  socket.send(
+    JSON.stringify({
+      type: 'play',
+      payload: {
+        challengeId: input.code,
+        userId: session.user.id,
+        amount,
+        username: session.user.name,
+        profileImage: '1.svg',
+      },
+    })
+  );
+
+  return fetchRoom(input.code);
+}
+
+export async function toggleReady(code: string, playerId: string): Promise<MatchRoom> {
+  const session = readStoredAuthSession();
+  if (!session?.token || !session?.user?.id) return fetchRoom(code);
+
+  const socket = getOrCreateLiveSocket({ token: session.token, userId: session.user.id });
+  const challenge = cachedChallenges.find((c) => c._id === code);
+
+  // If host accepts guest request to start game
+  if (socket?.connected && challenge && challenge.creator?._id === session.user.id) {
+    socket.send(
+      JSON.stringify({
+        type: 'startGame',
+        payload: {
+          challengeId: code,
+          userId: session.user.id,
+          amount: challenge.amount,
+          username: session.user.name,
+          profileImage: '1.svg',
+        },
+      })
+    );
+  }
+
+  return fetchRoom(code);
+}
+
+export async function submitLudoKingCode(
   code: string,
-  playerId: string,
-  ludoKingRoomCode: string
-): Promise<{ room: MatchRoom }> {
-  const norm = normalizeLobbyCode(code);
-  return requestJsonWithFallback<{ room: MatchRoom }>(
-    `/api/lobbies/${encodeURIComponent(norm)}/ludo-code`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ playerId, ludoKingRoomCode }),
-    },
-    () => {
-      const store = readLocalStore();
-      const room = store.rooms[norm];
-      if (!room) throw new Error('Match room not found.');
-      const sender = room.players.find((p) => p.id === playerId);
-      if (!sender) throw new Error('Only seated players can update the Ludo King code.');
-      if (!sender.isHost) throw new Error('Only the host can share the Ludo King room code.');
-      const codeCheck = validateLudoKingCode(ludoKingRoomCode);
-      if (!codeCheck.valid) throw new Error(codeCheck.error);
-      const now = new Date().toISOString();
-      room.ludoKingRoomCode = codeCheck.value;
-      room.updatedAt = now;
-      room.status = computeMatchStatus(room);
-      room.messages.push({
-        id: genLocalId('msg'),
-        senderId: 'system',
-        senderName: 'Matchmaker',
-        text: `${sender.name} shared Ludo King room code ${codeCheck.value}.`,
-        kind: 'system',
-        createdAt: now,
-      });
-      writeLocalStore(store);
-      return { room };
-    }
-  );
+  ludoCode: string,
+  _playerId: string
+): Promise<MatchRoom> {
+  const session = readStoredAuthSession();
+  if (!session?.token || !session?.user?.id) return fetchRoom(code);
+
+  const socket = getOrCreateLiveSocket({ token: session.token, userId: session.user.id });
+  if (socket?.connected) {
+    socket.send(
+      JSON.stringify({
+        type: 'setRoomCode',
+        payload: {
+          challengeId: code,
+          roomCode: ludoCode.trim(),
+        },
+      })
+    );
+  }
+
+  const room = await fetchRoom(code);
+  room.ludoKingRoomCode = ludoCode.trim();
+  room.status = 'in_ludo_king';
+  return room;
 }
 
-export function toggleReady(
+export async function markMatchStarted(code: string, _playerId: string): Promise<MatchRoom> {
+  return fetchRoom(code);
+}
+
+export async function reportWinner(
   code: string,
-  playerId: string,
-  ready: boolean
-): Promise<{ room: MatchRoom }> {
-  const norm = normalizeLobbyCode(code);
-  return requestJsonWithFallback<{ room: MatchRoom }>(
-    `/api/lobbies/${encodeURIComponent(norm)}/ready`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ playerId, ready }),
-    },
-    () => {
-      const store = readLocalStore();
-      const room = store.rooms[norm];
-      if (!room) throw new Error('Match room not found.');
-      const player = room.players.find((p) => p.id === playerId);
-      if (!player) throw new Error('Player is not seated in this room.');
-      player.readyInApp = ready;
-      const now = new Date().toISOString();
-      room.updatedAt = now;
-      room.status = computeMatchStatus(room);
-      room.messages.push({
-        id: genLocalId('msg'),
-        senderId: 'system',
-        senderName: 'Matchmaker',
-        text: ready
-          ? `${player.name} is ready inside Ludo King.`
-          : `${player.name} unchecked ready status.`,
-        kind: 'system',
-        createdAt: now,
-      });
-      writeLocalStore(store);
-      return { room };
-    }
-  );
+  input: {
+    reportedWinnerId: string;
+    reportedByPlayerId: string;
+    winnerScreenshot?: string | null;
+  }
+): Promise<MatchRoom> {
+  const session = readStoredAuthSession();
+  if (!session?.token) throw new Error('Authentication required');
+
+  const isSelfWinner = input.reportedWinnerId === session.user.id;
+  if (isSelfWinner) {
+    const res = await submitLiveMatchWin(code, input.winnerScreenshot || '', session.token);
+    if (!res.ok) throw new Error(res.message);
+  } else {
+    const res = await submitLiveMatchLoss(code, session.token);
+    if (!res.ok) throw new Error(res.message);
+  }
+
+  const room = await fetchRoom(code);
+  room.status = 'completed';
+  room.winnerId = input.reportedWinnerId;
+  return room;
 }
 
-export function markMatchStarted(code: string): Promise<{ room: MatchRoom }> {
-  const norm = normalizeLobbyCode(code);
-  return requestJsonWithFallback<{ room: MatchRoom }>(
-    `/api/lobbies/${encodeURIComponent(norm)}/start`,
-    { method: 'POST' },
-    () => {
-      const store = readLocalStore();
-      const room = store.rooms[norm];
-      if (!room) throw new Error('Match room not found.');
-      const now = new Date().toISOString();
-      room.status = 'in_ludo_king';
-      room.updatedAt = now;
-      room.messages.push({
-        id: genLocalId('msg'),
-        senderId: 'system',
-        senderName: 'Matchmaker',
-        text: 'Match marked live in Ludo King. Roll well!',
-        kind: 'system',
-        createdAt: now,
-      });
-      writeLocalStore(store);
-      return { room };
-    }
-  );
-}
-
-export function reportWinner(
+export async function confirmMatchResult(
   code: string,
-  winnerId: string,
-  reportedByPlayerId?: string,
-  winnerScreenshot?: string | null
-): Promise<{ room: MatchRoom }> {
-  const norm = normalizeLobbyCode(code);
-  return requestJsonWithFallback<{ room: MatchRoom }>(
-    `/api/lobbies/${encodeURIComponent(norm)}/winner`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ winnerId, reportedByPlayerId, winnerScreenshot }),
-    },
-    () => {
-      const store = readLocalStore();
-      const room = store.rooms[norm];
-      if (!room) throw new Error('Match room not found.');
-      if (room.players.length < 2) throw new Error('Two seated players are required.');
-      const winner = room.players.find((p) => p.id === winnerId);
-      if (!winner) throw new Error('Selected winner is not in this match.');
-      const reportedByWinner = Boolean(
-        reportedByPlayerId && reportedByPlayerId === winner.id
-      );
-      const shotCheck = validateWinnerScreenshot(winnerScreenshot, reportedByWinner);
-      if (!shotCheck.valid) {
-        throw new Error(shotCheck.error);
-      }
-      const now = new Date().toISOString();
-      room.winnerId = winner.id;
-      room.winnerName = winner.name;
-      room.status = 'completed';
-      room.updatedAt = now;
-      room.resultReport = createInitialResultReport(
-        room,
-        winner.id,
-        reportedByPlayerId,
-        now,
-        shotCheck.value
-      );
-      room.messages.push({
-        id: genLocalId('msg'),
-        senderId: 'system',
-        senderName: 'Matchmaker',
-        text: `${winner.name} recorded as Round ${room.roundNumber} winner.`,
-        kind: 'system',
-        createdAt: now,
-      });
-      const record: CompletedMatchRecord = {
-        id: genLocalId('rec'),
-        lobbyCode: room.code,
-        mode: room.mode,
-        amount: room.amount ?? 100,
-        stakesLabel: room.stakesLabel ?? 'Friendly',
-        bestOf: room.bestOf,
-        player1Name: room.players[0].name,
-        player1Color: room.players[0].color,
-        player2Name: room.players[1].name,
-        player2Color: room.players[1].color,
-        winnerName: winner.name,
-        ludoKingRoomCode: room.ludoKingRoomCode,
-        roundNumber: room.roundNumber,
-        completedAt: now,
-      };
-      store.recentMatches.unshift(record);
-      store.recentMatches = store.recentMatches.slice(0, 30);
-      writeLocalStore(store);
-      return { room };
-    }
-  );
+  _input: {
+    confirmingPlayerId: string;
+    accepted: boolean;
+    disputeReason?: string;
+  }
+): Promise<MatchRoom> {
+  return fetchRoom(code);
 }
 
-export function confirmMatchResult(
-  code: string,
-  playerId: string,
-  action: 'confirm' | 'dispute' = 'confirm',
-  disputeReason?: string,
-  winnerScreenshot?: string | null
-): Promise<{ room: MatchRoom }> {
-  const norm = normalizeLobbyCode(code);
-  return requestJsonWithFallback<{ room: MatchRoom }>(
-    `/api/lobbies/${encodeURIComponent(norm)}/confirm-result`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ playerId, action, disputeReason, winnerScreenshot }),
-    },
-    () => {
-      const store = readLocalStore();
-      const room = store.rooms[norm];
-      if (!room) throw new Error('Match room not found.');
-      if (!room.winnerId) throw new Error('No match result has been reported yet.');
-      const player = room.players.find((p) => p.id === playerId);
-      if (!player) throw new Error('Only seated players can confirm the match result.');
-      const needsScreenshot =
-        action === 'confirm' &&
-        player.id === room.winnerId &&
-        !room.resultReport?.winnerScreenshot;
-      const shotCheck = validateWinnerScreenshot(winnerScreenshot, needsScreenshot);
-      if (!shotCheck.valid) {
-        throw new Error(shotCheck.error);
-      }
-      const updatedRoom = applyResultConfirmation(
-        room,
-        playerId,
-        action,
-        new Date().toISOString(),
-        disputeReason,
-        shotCheck.value
-      );
-      store.rooms[norm] = updatedRoom;
-      writeLocalStore(store);
-      return { room: updatedRoom };
-    }
-  );
+export async function leaveLobby(code: string, playerId: string): Promise<void> {
+  const session = readStoredAuthSession();
+  if (!session?.token || !session?.user?.id) return;
+
+  const socket = getOrCreateLiveSocket({ token: session.token, userId: session.user.id });
+  if (!socket?.connected) return;
+
+  const challenge = cachedChallenges.find((c) => c._id === code);
+  const isHost = challenge?.creator?._id === session.user.id || challenge?.creator?._id === playerId;
+
+  if (isHost && challenge?.state === 'open') {
+    socket.send(
+      JSON.stringify({
+        type: 'delete',
+        payload: {
+          challengeId: code,
+          userId: session.user.id,
+          amount: challenge.amount,
+          username: session.user.name,
+          profileImage: '1.svg',
+        },
+      })
+    );
+  } else {
+    socket.send(
+      JSON.stringify({
+        type: 'cancel',
+        payload: {
+          challengeId: code,
+          userId: session.user.id,
+          amount: challenge?.amount || 50,
+          username: session.user.name,
+          profileImage: '1.svg',
+        },
+      })
+    );
+  }
 }
 
-export function requestRematch(code: string): Promise<{ room: MatchRoom }> {
-  const norm = normalizeLobbyCode(code);
-  return requestJsonWithFallback<{ room: MatchRoom }>(
-    `/api/lobbies/${encodeURIComponent(norm)}/rematch`,
-    { method: 'POST' },
-    () => {
-      const store = readLocalStore();
-      const room = store.rooms[norm];
-      if (!room) throw new Error('Match room not found.');
-      const nextRoom = applyRematchReset(room, new Date().toISOString());
-      store.rooms[norm] = nextRoom;
-      writeLocalStore(store);
-      return { room: nextRoom };
-    }
-  );
-}
-
-export function sendRoomChat(
-  code: string,
-  playerId: string,
-  text: string
-): Promise<{ room: MatchRoom }> {
-  const norm = normalizeLobbyCode(code);
-  return requestJsonWithFallback<{ room: MatchRoom }>(
-    `/api/lobbies/${encodeURIComponent(norm)}/chat`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ playerId, text }),
-    },
-    () => {
-      const store = readLocalStore();
-      const room = store.rooms[norm];
-      if (!room) throw new Error('Match room not found.');
-      const sender = room.players.find((p) => p.id === playerId);
-      if (!sender) throw new Error('Join the room to send messages.');
-      const clean = text.trim().slice(0, 240);
-      if (!clean) throw new Error('Message cannot be empty.');
-      const now = new Date().toISOString();
-      room.messages.push({
-        id: genLocalId('msg'),
-        senderId: sender.id,
-        senderName: sender.name,
-        text: clean,
-        kind: 'user',
-        createdAt: now,
-      });
-      room.updatedAt = now;
-      writeLocalStore(store);
-      return { room };
-    }
-  );
-}
-
-export function leaveLobby(
-  code: string,
-  playerId: string,
-  reason?: string
-): Promise<{ closed: boolean; room?: MatchRoom }> {
-  const norm = normalizeLobbyCode(code);
-  return requestJsonWithFallback<{ closed: boolean; room?: MatchRoom }>(
-    `/api/lobbies/${encodeURIComponent(norm)}/leave`,
-    {
-      method: 'POST',
-      body: JSON.stringify(reason ? { playerId, reason } : { playerId }),
-    },
-    () => {
-      const store = readLocalStore();
-      const room = store.rooms[norm];
-      if (!room) return { closed: true };
-      const departing = room.players.find((p) => p.id === playerId);
-      room.players = room.players.filter((p) => p.id !== playerId);
-      if (room.players.length === 0) {
-        delete store.rooms[norm];
-        writeLocalStore(store);
-        return { closed: true };
-      }
-      room.players[0].isHost = true;
-      room.players[0].readyInApp = false;
-      room.ludoKingRoomCode = null;
-      room.winnerId = null;
-      room.winnerName = null;
-      room.status = 'waiting';
-      room.updatedAt = new Date().toISOString();
-      if (departing) {
-        const cleanReason = reason?.trim();
-        room.messages.push({
-          id: genLocalId('msg'),
-          senderId: 'system',
-          senderName: 'Matchmaker',
-          text: cleanReason
-            ? `${departing.name} cancelled joining (${cleanReason}). Waiting for a new opponent.`
-            : `${departing.name} left the lobby. Waiting for a second player.`,
-          kind: 'system',
-          createdAt: room.updatedAt,
-        });
-      }
-      writeLocalStore(store);
-      return { closed: false, room };
-    }
-  );
+export async function requestRematch(code: string, _playerId: string): Promise<MatchRoom> {
+  const old = await fetchRoom(code);
+  return createLobby({
+    hostName: old.players[0]?.name || 'Player',
+    battleAmount: old.amount,
+    mode: old.mode,
+  });
 }

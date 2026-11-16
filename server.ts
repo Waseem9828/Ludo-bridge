@@ -427,6 +427,33 @@ async function startServer() {
     });
   });
 
+  // Transparent proxy to live MKG backend
+  app.all('/api/live/*', async (req, res) => {
+    const targetPath = (req.params as any)[0] || '';
+    const targetUrl = `https://apiv2.mkgplayers.com/api/${targetPath}`;
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': (req.headers['content-type'] as string) || 'application/json',
+      };
+      if (req.headers.authorization) headers['Authorization'] = String(req.headers.authorization);
+      if (req.headers['x-auth-token']) headers['Authorization'] = String(req.headers['x-auth-token']);
+
+      const options: RequestInit = {
+        method: req.method,
+        headers,
+      };
+      if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
+        options.body = JSON.stringify(req.body);
+      }
+
+      const proxyRes = await fetch(targetUrl, options);
+      const data = await proxyRes.text();
+      res.status(proxyRes.status).type(proxyRes.headers.get('content-type') || 'application/json').send(data);
+    } catch (err: any) {
+      res.status(502).json({ error: 'Proxy request failed: ' + err.message });
+    }
+  });
+
   app.get('/api/lobbies', (_req, res) => {
     pruneExpiredOpenBattles();
     res.json(buildHubSnapshot());

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminPanelPage } from './components/AdminPanelPage';
 import { fetchPlayerDeposits } from './api/adminClient';
+import { fetchLiveWallet } from './api/liveBackendClient';
 import {
   fetchCurrentAuthUser,
   logoutAuthSession,
@@ -1134,6 +1135,11 @@ export default function App() {
       setAuthSession({ user, token });
       handleSavePlayerName(user.name);
       handleSaveAvatar(user.avatarId);
+      void fetchLiveWallet(token).then((w) => {
+        if (w) {
+          setWallet((prev) => ({ ...prev, balance: w.wallet }));
+        }
+      });
       playSound('lobbyEnter');
       navigateToRoute('lobby');
     },
@@ -1146,6 +1152,17 @@ export default function App() {
     void logoutAuthSession(token);
     navigateToRoute('login');
   }, [authSession?.token, navigateToRoute]);
+
+  useEffect(() => {
+    const onLiveWalletUpdate = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && typeof detail.wallet === 'number') {
+        setWallet((prev) => ({ ...prev, balance: detail.wallet }));
+      }
+    };
+    window.addEventListener('ludobridge.walletUpdated', onLiveWalletUpdate);
+    return () => window.removeEventListener('ludobridge.walletUpdated', onLiveWalletUpdate);
+  }, []);
 
   useEffect(() => {
     const token = authSession?.token;
@@ -1161,6 +1178,11 @@ export default function App() {
         setAuthSession({ user: res.user, token: res.token });
         handleSavePlayerName(res.user.name);
         handleSaveAvatar(res.user.avatarId);
+        void fetchLiveWallet(token).then((w) => {
+          if (active && w) {
+            setWallet((prev) => ({ ...prev, balance: w.wallet }));
+          }
+        });
       })
       .catch(() => {});
     return () => {

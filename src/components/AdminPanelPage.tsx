@@ -467,6 +467,14 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
               />
               <span className="hidden sm:inline">Refresh</span>
             </button>
+            <a
+              href="https://mkgadmin2.mkgplayers.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50 px-3 py-1.5 text-xs font-bold text-purple-700 hover:bg-purple-100 whitespace-nowrap"
+            >
+              <span>Live Admin Portal</span>
+            </a>
             <button
               type="button"
               onClick={onExitAdmin}

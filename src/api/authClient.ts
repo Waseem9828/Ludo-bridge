@@ -1,16 +1,14 @@
 import {
-  ensureAuthStore,
-  requestOtpForMobile,
-  verifyOtpForMobile,
-  type AuthStoreState,
+  formatIndianMobile,
+  normalizeIndianMobile,
   type AuthUserAccount,
   type OtpAuthIntent,
 } from '../shared/auth';
 import type { OtpDeliveryChannel } from '../shared/imbCommunications';
 import type { AvatarId } from '../shared/matchmaking';
+import { apiRequest, LIVE_BACKEND_URLS } from './liveBackendClient';
 
 const AUTH_SESSION_STORAGE_KEY = 'ludobridge.authSession';
-const OFFLINE_AUTH_STORE_KEY = 'ludobridge.offlineAuthStore';
 
 export interface StoredAuthSession {
   token: string;
@@ -46,7 +44,7 @@ export function readStoredAuthSession(): StoredAuthSession | null {
       return parsed;
     }
   } catch {
-    // ignore storage errors
+    // ignore
   }
   return null;
 }
@@ -59,79 +57,69 @@ export function writeStoredAuthSession(session: StoredAuthSession | null): void 
       window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(session));
     }
   } catch {
-    // ignore storage errors
+    // ignore
   }
-}
-
-function readOfflineAuthStore(): AuthStoreState {
-  try {
-    const raw = window.localStorage.getItem(OFFLINE_AUTH_STORE_KEY);
-    if (raw) {
-      return ensureAuthStore(JSON.parse(raw) as AuthStoreState);
-    }
-  } catch {
-    // ignore storage errors
-  }
-  return ensureAuthStore(null);
-}
-
-function writeOfflineAuthStore(state: AuthStoreState): void {
-  try {
-    window.localStorage.setItem(OFFLINE_AUTH_STORE_KEY, JSON.stringify(state));
-  } catch {
-    // ignore storage errors
-  }
-}
-
-async function readApiResponse<T>(res: Response): Promise<T> {
-  const data = (await res.json().catch(() => ({}))) as { error?: string } & T;
-  if (!res.ok) {
-    throw new Error(data.error || `Request failed (${res.status}).`);
-  }
-  return data;
-}
-
-function isNetworkError(err: unknown): boolean {
-  return err instanceof TypeError;
 }
 
 export async function sendAuthOtp(input: {
   mobile: string;
   intent: OtpAuthIntent;
   channel?: OtpDeliveryChannel;
+  name?: string;
+  referralCode?: string;
 }): Promise<SendOtpResponse> {
-  const channel: OtpDeliveryChannel = input.channel === 'whatsapp' ? 'whatsapp' : 'sms';
-  try {
-    const res = await fetch('/api/auth/send-otp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...input, channel }),
-    });
-    return await readApiResponse<SendOtpResponse>(res);
-  } catch (err) {
-    if (!isNetworkError(err)) throw err;
-    const offlineState = readOfflineAuthStore();
-    const res = requestOtpForMobile(offlineState, {
-      mobile: input.mobile,
-      intent: input.intent,
-    });
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    writeOfflineAuthStore(res.state);
+  const norm = normalizeIndianMobile(input.mobile);
+  const cleanMobile = norm.valid ? norm.mobile : input.mobile.replace(/\D/g, '').slice(-10);
+
+  // First try login to check if user exists
+  const loginRes = await apiRequest('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ phone: cleanMobile }),
+  });
+
+  if (loginRes.status === 200) {
     return {
       ok: true,
-      mobile: res.challenge.mobile,
-      formattedMobile: res.formattedMobile,
-      intent: res.challenge.intent,
-      channel,
-      deliveryProvider: 'preview',
-      deliveryStatus: 'queued',
+      mobile: cleanMobile,
+      formattedMobile: formatIndianMobile(cleanMobile),
+      intent: 'login',
+      channel: 'sms',
+      deliveryProvider: 'imb',
+      deliveryStatus: 'sent',
       expiresInSeconds: 300,
       resendCooldownSeconds: 30,
-      otpPreview: res.challenge.code,
     };
   }
+
+  // If user does not exist (404), trigger signup to register and send OTP
+  if (loginRes.status === 404 || input.intent === 'signup') {
+    const signupRes = await apiRequest('/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({
+        fullName: input.name || 'Ludo Player',
+        phone: cleanMobile,
+        referCode: input.referralCode || '',
+      }),
+    });
+
+    if (signupRes.status === 200 || signupRes.status === 201) {
+      return {
+        ok: true,
+        mobile: cleanMobile,
+        formattedMobile: formatIndianMobile(cleanMobile),
+        intent: 'signup',
+        channel: 'sms',
+        deliveryProvider: 'imb',
+        deliveryStatus: 'sent',
+        expiresInSeconds: 300,
+        resendCooldownSeconds: 30,
+      };
+    }
+
+    throw new Error(signupRes.error || 'Failed to dispatch registration OTP');
+  }
+
+  throw new Error(loginRes.error || 'Failed to dispatch login OTP');
 }
 
 export async function verifyAuthOtp(input: {
@@ -142,52 +130,77 @@ export async function verifyAuthOtp(input: {
   avatarId?: AvatarId;
   referralCode?: string;
 }): Promise<VerifyOtpResponse> {
-  try {
-    const res = await fetch('/api/auth/verify-otp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    const payload = await readApiResponse<VerifyOtpResponse>(res);
-    writeStoredAuthSession({ token: payload.token, user: payload.user });
-    return payload;
-  } catch (err) {
-    if (!isNetworkError(err)) throw err;
-    const offlineState = readOfflineAuthStore();
-    const res = verifyOtpForMobile(offlineState, input);
-    writeOfflineAuthStore(res.state);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    writeStoredAuthSession({ token: res.token, user: res.user });
-    return {
-      ok: true,
-      user: res.user,
-      token: res.token,
-    };
+  const norm = normalizeIndianMobile(input.mobile);
+  const cleanMobile = norm.valid ? norm.mobile : input.mobile.replace(/\D/g, '').slice(-10);
+
+  const res = await apiRequest('/auth/confirmOTP', {
+    method: 'POST',
+    body: JSON.stringify({
+      phone: cleanMobile,
+      otp: input.otp.trim(),
+    }),
+  });
+
+  if (res.status !== 200 || !res.data) {
+    throw new Error(res.error || 'Invalid OTP code. Please try again.');
   }
+
+  const rawData = res.data;
+  const token = typeof rawData.jwtToken === 'string'
+    ? rawData.jwtToken
+    : (rawData.jwtToken?.jwtToken || rawData.token || '');
+
+  const user: AuthUserAccount = {
+    id: rawData._id || `user_${cleanMobile}`,
+    name: rawData.fullName || rawData.username || input.name || 'Ludo Champion',
+    mobile: cleanMobile,
+    avatarId: input.avatarId || 'avatar-amber-king',
+    referralCode: rawData.referCode || input.referralCode,
+    createdAt: rawData.createdAt || new Date().toISOString(),
+    lastLoginAt: new Date().toISOString(),
+  };
+
+  const session: StoredAuthSession = { token, user };
+  writeStoredAuthSession(session);
+
+  return {
+    ok: true,
+    user,
+    token,
+  };
 }
 
 export async function fetchCurrentAuthUser(
   token: string
 ): Promise<VerifyOtpResponse | null> {
-  if (!token) return null;
-  try {
-    const res = await fetch('/api/auth/me', {
-      headers: { 'x-auth-token': token },
-    });
-    if (res.status === 401) {
-      writeStoredAuthSession(null);
-      return null;
-    }
-    const payload = await readApiResponse<VerifyOtpResponse>(res);
-    writeStoredAuthSession({ token: payload.token, user: payload.user });
-    return payload;
-  } catch {
-    return readStoredAuthSession()
-      ? { ok: true, ...(readStoredAuthSession() as StoredAuthSession) }
-      : null;
+  if (!token?.trim()) return null;
+
+  const res = await apiRequest('/user/getUserProfileData', { method: 'GET' }, token);
+  if (res.status === 200 && res.data) {
+    const rawData = res.data;
+    const existing = readStoredAuthSession();
+    const user: AuthUserAccount = {
+      id: rawData._id || existing?.user?.id || 'user',
+      name: rawData.fullName || rawData.username || existing?.user?.name || 'Player',
+      mobile: rawData.phone || existing?.user?.mobile || '',
+      avatarId: existing?.user?.avatarId || 'avatar-amber-king',
+      referralCode: rawData.referCode || existing?.user?.referralCode,
+      createdAt: rawData.createdAt || existing?.user?.createdAt || new Date().toISOString(),
+      lastLoginAt: new Date().toISOString(),
+    };
+
+    const session: StoredAuthSession = { token, user };
+    writeStoredAuthSession(session);
+    return { ok: true, user, token };
   }
+
+  if (res.status === 401 || res.status === 403) {
+    writeStoredAuthSession(null);
+    return null;
+  }
+
+  const fallback = readStoredAuthSession();
+  return fallback ? { ok: true, ...fallback } : null;
 }
 
 export interface OtpChannelsResponse {
@@ -197,36 +210,19 @@ export interface OtpChannelsResponse {
 }
 
 export async function fetchOtpChannels(): Promise<OtpChannelsResponse> {
-  try {
-    const res = await fetch('/api/auth/channels');
-    if (!res.ok) throw new Error('Failed to load OTP channels');
-    const data = (await res.json()) as Partial<OtpChannelsResponse>;
-    return {
-      imbConfigured: Boolean(data.imbConfigured),
-      defaultChannel: data.defaultChannel === 'whatsapp' ? 'whatsapp' : 'sms',
-      supportedChannels:
-        Array.isArray(data.supportedChannels) && data.supportedChannels.length > 0
-          ? data.supportedChannels
-          : ['sms', 'whatsapp'],
-    };
-  } catch {
-    return {
-      imbConfigured: false,
-      defaultChannel: 'sms',
-      supportedChannels: ['sms', 'whatsapp'],
-    };
-  }
+  return {
+    imbConfigured: true,
+    defaultChannel: 'sms',
+    supportedChannels: ['sms', 'whatsapp'],
+  };
 }
 
 export async function logoutAuthSession(token: string | null): Promise<void> {
   writeStoredAuthSession(null);
   if (!token) return;
   try {
-    await fetch('/api/auth/logout', {
-      method: 'POST',
-      headers: { 'x-auth-token': token },
-    });
+    await apiRequest('/auth/logout', { method: 'GET' }, token);
   } catch {
-    // ignore network failure during logout
+    // ignore
   }
 }
