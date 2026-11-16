@@ -1183,13 +1183,11 @@ export default function App() {
     fetchCurrentAuthUser(token)
       .then((res) => {
         if (!active) return;
-        if (!res) {
-          setAuthSession(null);
-          return;
+        if (res && res.user) {
+          setAuthSession({ user: res.user, token: res.token });
+          handleSavePlayerName(res.user.name);
+          handleSaveAvatar(res.user.avatarId);
         }
-        setAuthSession({ user: res.user, token: res.token });
-        handleSavePlayerName(res.user.name);
-        handleSaveAvatar(res.user.avatarId);
         void fetchLiveWallet(token).then((w) => {
           if (active && w) {
             setWallet((prev) => ({ ...prev, balance: w.wallet }));

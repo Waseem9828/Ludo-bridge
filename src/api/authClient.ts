@@ -40,8 +40,20 @@ export function readStoredAuthSession(): StoredAuthSession | null {
     const raw = window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as StoredAuthSession;
-      if (parsed?.token && parsed?.user?.id && parsed?.user?.mobile) {
-        return parsed;
+      if (parsed?.token) {
+        const u = (parsed.user || {}) as any;
+        return {
+          token: parsed.token,
+          user: {
+            id: u.id || u._id || 'user',
+            name: u.name || u.fullName || 'Player',
+            mobile: u.mobile || u.phone || '',
+            avatarId: u.avatarId || 'avatar-amber-king',
+            referralCode: u.referralCode || u.referCode,
+            createdAt: u.createdAt || new Date().toISOString(),
+            lastLoginAt: u.lastLoginAt || new Date().toISOString(),
+          },
+        };
       }
     }
   } catch {
@@ -50,20 +62,20 @@ export function readStoredAuthSession(): StoredAuthSession | null {
 
   // Fallback: check document.cookie
   try {
-    if (typeof document !== 'undefined') {
+    if (typeof document !== 'undefined' && document.cookie) {
       const cookies = Object.fromEntries(
         document.cookie.split('; ').map((c) => {
           const [k, ...v] = c.split('=');
-          return [k, decodeURIComponent(v.join('='))];
+          return [k ? k.trim() : '', decodeURIComponent((v || []).join('='))];
         })
       );
-      if (cookies.token && cookies.userId && cookies.phone) {
+      if (cookies.token) {
         return {
           token: cookies.token,
           user: {
-            id: cookies.userId,
+            id: cookies.userId || 'user',
             name: cookies.fullName || 'Player',
-            mobile: cookies.phone,
+            mobile: cookies.phone || '',
             avatarId: 'avatar-amber-king',
             createdAt: new Date().toISOString(),
             lastLoginAt: new Date().toISOString(),
@@ -222,32 +234,32 @@ export async function fetchCurrentAuthUser(
 ): Promise<VerifyOtpResponse | null> {
   if (!token?.trim()) return null;
 
-  const res = await apiRequest('/user/getUserProfileData', { method: 'GET' }, token);
-  if (res.status === 200 && res.data) {
-    const rawData = res.data;
-    const existing = readStoredAuthSession();
-    const user: AuthUserAccount = {
-      id: rawData._id || existing?.user?.id || 'user',
-      name: rawData.fullName || rawData.username || existing?.user?.name || 'Player',
-      mobile: rawData.phone || existing?.user?.mobile || '',
-      avatarId: existing?.user?.avatarId || 'avatar-amber-king',
-      referralCode: rawData.referCode || existing?.user?.referralCode,
-      createdAt: rawData.createdAt || existing?.user?.createdAt || new Date().toISOString(),
-      lastLoginAt: new Date().toISOString(),
-    };
+  const existing = readStoredAuthSession();
 
-    const session: StoredAuthSession = { token, user };
-    writeStoredAuthSession(session);
-    return { ok: true, user, token };
+  try {
+    const res = await apiRequest('/user/getUserProfileData', { method: 'GET' }, token);
+    if (res.status === 200 && res.data) {
+      const rawData = res.data?.data || res.data;
+      const user: AuthUserAccount = {
+        id: rawData._id || rawData.id || existing?.user?.id || 'user',
+        name: rawData.fullName || rawData.username || existing?.user?.name || 'Player',
+        mobile: rawData.phone || rawData.mobile || existing?.user?.mobile || '',
+        avatarId: existing?.user?.avatarId || 'avatar-amber-king',
+        referralCode: rawData.referCode || rawData.referralCode || existing?.user?.referralCode,
+        createdAt: rawData.createdAt || existing?.user?.createdAt || new Date().toISOString(),
+        lastLoginAt: new Date().toISOString(),
+      };
+
+      const session: StoredAuthSession = { token, user };
+      writeStoredAuthSession(session);
+      return { ok: true, user, token };
+    }
+  } catch {
+    // network issue - preserve session
   }
 
-  if (res.status === 401 || res.status === 403) {
-    writeStoredAuthSession(null);
-    return null;
-  }
-
-  const fallback = readStoredAuthSession();
-  return fallback ? { ok: true, ...fallback } : null;
+  // Never clear stored session on profile fetch error! Keep fallback session active
+  return existing ? { ok: true, ...existing } : null;
 }
 
 export interface OtpChannelsResponse {
