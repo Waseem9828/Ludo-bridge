@@ -312,15 +312,26 @@ export function registerSocketListeners(listeners: typeof socketListeners): void
   socketListeners = { ...socketListeners, ...listeners };
 }
 
+export function getApiBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    if (window.location.hostname.includes('pages.dev') || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
+      return '/api';
+    }
+    return '/api/live';
+  }
+  return 'https://apiv2.mkgplayers.com/api';
+}
+
 // REST API Methods to apiv2.mkgplayers.com
 export async function apiRequest<T = any>(
   endpoint: string,
   options?: RequestInit,
   token?: string | null
 ): Promise<{ status: number; data: T; error: string | null }> {
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const url = endpoint.startsWith('http')
     ? endpoint
-    : `${LIVE_BACKEND_URLS.apiBase}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+    : `${getApiBaseUrl()}${cleanEndpoint}`;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
