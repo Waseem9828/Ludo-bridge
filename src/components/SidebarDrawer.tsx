@@ -5,14 +5,18 @@ import {
   Gift,
   History,
   Home,
+  LogIn,
+  LogOut,
   Receipt,
   RotateCcw,
   ShieldCheck,
   Trophy,
   User,
+  UserPlus,
   Wallet,
   X,
 } from 'lucide-react';
+import { formatIndianMobile, type AuthUserAccount } from '../shared/auth';
 import type { AvatarId } from '../shared/matchmaking';
 import { PlayerAvatar } from './PlayerAvatar';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -32,15 +36,19 @@ export type AppViewRoute =
   | 'terms'
   | 'gst-policy'
   | 'refund-policy'
-  | 'admin';
+  | 'admin'
+  | 'login'
+  | 'signup';
 
 interface SidebarDrawerProps {
   open: boolean;
   currentView: AppViewRoute;
   playerName: string;
   avatarId: AvatarId;
+  authUser?: AuthUserAccount | null;
   onClose: () => void;
   onNavigate: (route: Exclude<AppViewRoute, 'room'>) => void;
+  onLogout?: () => void;
 }
 
 const PRIMARY_ITEMS: Array<{
@@ -74,8 +82,10 @@ export function SidebarDrawer({
   currentView,
   playerName,
   avatarId,
+  authUser,
   onClose,
   onNavigate,
+  onLogout,
 }: SidebarDrawerProps) {
   useEffect(() => {
     if (!open) return;
@@ -138,7 +148,9 @@ export function SidebarDrawer({
             <PlayerAvatar name={playerName} avatarId={avatarId} size="sm" />
             <div className="min-w-0">
               <p className="truncate text-sm font-bold text-[#16181D]">{playerName}</p>
-              <p className="text-xs text-[#5A606D]">View &amp; edit profile</p>
+              <p className="truncate text-xs text-[#5A606D] tabular-nums">
+                {authUser ? formatIndianMobile(authUser.mobile) : 'View & edit profile'}
+              </p>
             </div>
           </button>
         </div>
@@ -205,6 +217,53 @@ export function SidebarDrawer({
                 </a>
               );
             })}
+          </div>
+
+          <div className="border-t border-[#16181D]/8 pt-4 space-y-1">
+            <p className="px-3.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-[#5A606D]">
+              Account
+            </p>
+            {authUser ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onLogout?.();
+                  onClose();
+                }}
+                data-testid="sidebar-logout-btn"
+                className="flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-left text-sm font-semibold text-[#991B1B] transition-colors hover:bg-white"
+              >
+                <LogOut className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>Logout</span>
+              </button>
+            ) : (
+              <>
+                <a
+                  href="/login"
+                  data-testid="sidebar-login-link"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleSelect('login');
+                  }}
+                  className="flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-[#16181D] transition-colors hover:bg-white"
+                >
+                  <LogIn className="h-4 w-4 shrink-0 text-[#0D7A5F]" aria-hidden="true" />
+                  <span>Login</span>
+                </a>
+                <a
+                  href="/signup"
+                  data-testid="sidebar-signup-link"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleSelect('signup');
+                  }}
+                  className="flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-[#16181D] transition-colors hover:bg-white"
+                >
+                  <UserPlus className="h-4 w-4 shrink-0 text-[#0D7A5F]" aria-hidden="true" />
+                  <span>Sign Up</span>
+                </a>
+              </>
+            )}
           </div>
 
           <div className="border-t border-[#16181D]/8 pt-4 space-y-1">

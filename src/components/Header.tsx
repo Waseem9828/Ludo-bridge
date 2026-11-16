@@ -8,10 +8,12 @@ interface HeaderProps {
   walletBalance: number;
   soundEnabled: boolean;
   hasNotificationDot: boolean;
+  isAuthenticated?: boolean;
   onToggleSound: () => void;
   onOpenSidebar: () => void;
   onNavigateHome: () => void;
   onNavigateWallet: () => void;
+  onNavigateLogin?: () => void;
   onLeaveRoom: () => void;
   onOpenGuide: () => void;
   onOpenNotifications: () => void;
@@ -23,10 +25,12 @@ export function Header({
   walletBalance,
   soundEnabled,
   hasNotificationDot,
+  isAuthenticated,
   onToggleSound,
   onOpenSidebar,
   onNavigateHome,
   onNavigateWallet,
+  onNavigateLogin,
   onLeaveRoom,
   onOpenGuide,
   onOpenNotifications,
@@ -115,6 +119,20 @@ export function Header({
         >
           <HelpCircle className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
         </button>
+
+        {!isAuthenticated && onNavigateLogin && (
+          <a
+            href="/login"
+            onClick={(e) => {
+              e.preventDefault();
+              onNavigateLogin();
+            }}
+            data-testid="header-login-btn"
+            className="hidden sm:inline-flex min-h-[38px] items-center rounded-full bg-white px-4 py-1.5 text-xs font-bold text-[#16181D] shadow-pill-btn transition-colors hover:bg-[#FAF9F5] whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0D7A5F]"
+          >
+            Login
+          </a>
+        )}
 
         <button
           type="button"

@@ -178,6 +178,19 @@ export function isPlayerInRoom(
   return room.players.some((p) => p.name.trim().toLowerCase() === normalized);
 }
 
+export function isPlayerSeatedInRoom(
+  room: Pick<MatchRoom, 'players'>,
+  playerName: string,
+  playerId?: string | null
+): boolean {
+  if (playerId && room.players.some((p) => p.id === playerId)) {
+    return true;
+  }
+  const normalized = playerName.trim().toLowerCase();
+  if (!normalized) return false;
+  return room.players.some((p) => p.name.trim().toLowerCase() === normalized);
+}
+
 export function countPlayerActiveBattles(
   rooms: Iterable<Pick<MatchRoom, 'code' | 'status' | 'players'>>,
   playerName: string,

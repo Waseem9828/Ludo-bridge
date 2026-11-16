@@ -23,7 +23,7 @@ export default defineConfig(() => {
         ],
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,json}'],
-          navigateFallbackDenylist: [/^\/api\//, /^\/ws$/],
+          navigateFallbackDenylist: [/^\/api\//, /^\/ws$/, /^\/vite-hmr$/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -61,6 +61,25 @@ export default defineConfig(() => {
         },
       }),
     ],
+    build: {
+      sourcemap: false,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
+              return 'react-vendor';
+            }
+            if (id.includes('node_modules/lucide-react') || id.includes('node_modules/motion')) {
+              return 'ui-vendor';
+            }
+            if (id.includes('node_modules/qrcode')) {
+              return 'qr-vendor';
+            }
+            return undefined;
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname, '.'),

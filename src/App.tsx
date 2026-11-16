@@ -2,6 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminPanelPage } from './components/AdminPanelPage';
 import { fetchPlayerDeposits } from './api/adminClient';
 import {
+  fetchCurrentAuthUser,
+  logoutAuthSession,
+  readStoredAuthSession,
+  type StoredAuthSession,
+} from './api/authClient';
+import {
   confirmMatchResult,
   createLobby,
   fetchHubSnapshot,
@@ -21,7 +27,9 @@ import { Header } from './components/Header';
 import { HistoryPage } from './components/HistoryPage';
 import { HomePage } from './components/HomePage';
 import { LeaderboardPage } from './components/LeaderboardPage';
+import { LoginPage } from './components/LoginPage';
 import { MatchmakerHub } from './components/MatchmakerHub';
+import { SignupPage } from './components/SignupPage';
 import { MatchRoom } from './components/MatchRoom';
 import { MobileNav } from './components/MobileNav';
 import { NotificationDrawer } from './components/NotificationDrawer';
@@ -99,6 +107,8 @@ const ROUTE_TO_PATH: Record<Exclude<AppViewRoute, 'room'>, string> = {
   'gst-policy': '/gst-policy',
   'refund-policy': '/refund-policy',
   admin: '/admin',
+  login: '/login',
+  signup: '/signup',
 };
 
 function parseRouteFromLocation(): ParsedRoute {
@@ -114,6 +124,13 @@ function parseRouteFromLocation(): ParsedRoute {
     const code = normalizeLobbyCode(pathname.slice('/room/'.length));
     if (code) {
       return { view: 'room', roomCode: code, joinCode: '' };
+    }
+  }
+
+  if (pathname.startsWith('/join/')) {
+    const code = normalizeLobbyCode(pathname.slice('/join/'.length));
+    if (code) {
+      return { view: 'lobby', roomCode: '', joinCode: code };
     }
   }
 
@@ -155,6 +172,8 @@ function parseRouteFromLocation(): ParsedRoute {
   if (pathname === '/gst-policy') return { view: 'gst-policy', roomCode: '', joinCode: '' };
   if (pathname === '/refund-policy') return { view: 'refund-policy', roomCode: '', joinCode: '' };
   if (pathname === '/admin') return { view: 'admin', roomCode: '', joinCode: '' };
+  if (pathname === '/login') return { view: 'login', roomCode: '', joinCode: '' };
+  if (pathname === '/signup') return { view: 'signup', roomCode: '', joinCode: '' };
 
   return { view: 'home', roomCode: '', joinCode: '' };
 }
@@ -417,8 +436,15 @@ export default function App() {
   const [pendingDepositAmount, setPendingDepositAmount] = useState<number>(
     () => initialRoute.depositAmount ?? 100
   );
-  const [playerName, setPlayerName] = useState<string>(() => getOrCreatePlayerName());
-  const [avatarId, setAvatarId] = useState<AvatarId>(() => getOrCreateAvatarId());
+  const [playerName, setPlayerName] = useState<string>(
+    () => readStoredAuthSession()?.user.name ?? getOrCreatePlayerName()
+  );
+  const [avatarId, setAvatarId] = useState<AvatarId>(
+    () => readStoredAuthSession()?.user.avatarId ?? getOrCreateAvatarId()
+  );
+  const [authSession, setAuthSession] = useState<StoredAuthSession | null>(() =>
+    readStoredAuthSession()
+  );
   const [wallet, setWallet] = useState<StoredWallet>(() => readWalletState());
   const [playerDeposits, setPlayerDeposits] = useState<AdminDepositRecord[]>([]);
   const creditedDepositsRef = useRef<Set<string>>(new Set(readCreditedDeposits()));
@@ -738,7 +764,19 @@ export default function App() {
       });
 
     if (initialRoute.joinCode) {
-      joinLobby(initialRoute.joinCode, getOrCreatePlayerName())
+      const currentName = getOrCreatePlayerName();
+      fetchRoom(initialRoute.joinCode)
+        .then(async ({ room: fetched }) => {
+          const existingPid = findParticipantPlayerId(
+            fetched,
+            { ...readMyRooms(), ...readHostedRooms() },
+            currentName
+          );
+          if (existingPid) {
+            return { room: fetched, playerId: existingPid };
+          }
+          return joinLobby(initialRoute.joinCode!, currentName);
+        })
         .then(({ room, playerId }) => {
           if (!mounted) return;
           enterRoom(room, playerId, true);
@@ -754,15 +792,19 @@ export default function App() {
         });
     } else if (initialRoute.roomCode) {
       const stored = readStoredSession();
+      const currentName = getOrCreatePlayerName();
+      const combinedIds = { ...readMyRooms(), ...readHostedRooms() };
       fetchRoom(initialRoute.roomCode)
         .then(({ room }) => {
           if (!mounted) return;
-          const matchedPlayer =
-            stored && stored.roomCode === room.code
-              ? room.players.find((p) => p.id === stored.playerId)
-              : null;
-          if (matchedPlayer) {
-            enterRoom(room, matchedPlayer.id, true);
+          const storedPid =
+            stored && stored.roomCode === room.code ? stored.playerId : null;
+          const matchedPlayerId =
+            (storedPid && room.players.some((p) => p.id === storedPid)
+              ? storedPid
+              : null) ?? findParticipantPlayerId(room, combinedIds, currentName);
+          if (matchedPlayerId) {
+            enterRoom(room, matchedPlayerId, true);
           } else {
             exitRoomToLobby(true);
           }
@@ -959,6 +1001,17 @@ export default function App() {
     const targetRoom =
       hub.openLobbies.find((r) => r.code === code) ??
       (await fetchRoom(code)).room;
+    const combinedIds = { ...myRooms, ...hostedRooms };
+    const existingParticipantId = findParticipantPlayerId(
+      targetRoom,
+      combinedIds,
+      playerName
+    );
+    if (existingParticipantId) {
+      enterRoom(targetRoom, existingParticipantId);
+      return;
+    }
+
     const combinedRooms = new Map<string, MatchRoomType>();
     for (const r of [...hub.openLobbies, ...hub.runningBattles]) {
       combinedRooms.set(r.code, r);
@@ -969,7 +1022,7 @@ export default function App() {
       walletBalance: wallet.balance,
       rooms: combinedRooms.values(),
       playerName,
-      myRoomPlayerIds: { ...myRooms, ...hostedRooms },
+      myRoomPlayerIds: combinedIds,
     });
     if (!eligibility.valid) {
       throw new Error(eligibility.error);
@@ -1076,8 +1129,68 @@ export default function App() {
     [navigateLobby, navigateToRoute, view]
   );
 
+  const handleAuthSuccess = useCallback(
+    ({ user, token }: { user: StoredAuthSession['user']; token: string }) => {
+      setAuthSession({ user, token });
+      handleSavePlayerName(user.name);
+      handleSaveAvatar(user.avatarId);
+      playSound('lobbyEnter');
+      navigateToRoute('lobby');
+    },
+    [handleSaveAvatar, handleSavePlayerName, navigateToRoute]
+  );
+
+  const handleLogout = useCallback(() => {
+    const token = authSession?.token ?? null;
+    setAuthSession(null);
+    void logoutAuthSession(token);
+    navigateToRoute('login');
+  }, [authSession?.token, navigateToRoute]);
+
+  useEffect(() => {
+    const token = authSession?.token;
+    if (!token) return;
+    let active = true;
+    fetchCurrentAuthUser(token)
+      .then((res) => {
+        if (!active) return;
+        if (!res) {
+          setAuthSession(null);
+          return;
+        }
+        setAuthSession({ user: res.user, token: res.token });
+        handleSavePlayerName(res.user.name);
+        handleSaveAvatar(res.user.avatarId);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [authSession?.token, handleSaveAvatar, handleSavePlayerName]);
+
   if (view === 'admin') {
     return <AdminPanelPage onExitAdmin={() => navigateToRoute('home')} />;
+  }
+
+  if (view === 'login') {
+    return (
+      <LoginPage
+        onAuthSuccess={handleAuthSuccess}
+        onNavigateSignup={() => navigateToRoute('signup')}
+        onNavigateHome={navigateHome}
+      />
+    );
+  }
+
+  if (view === 'signup') {
+    return (
+      <SignupPage
+        defaultAvatarId={avatarId}
+        onAuthSuccess={handleAuthSuccess}
+        onNavigateLogin={() => navigateToRoute('login')}
+        onNavigateHome={navigateHome}
+      />
+    );
   }
 
   return (
@@ -1088,10 +1201,12 @@ export default function App() {
         walletBalance={wallet.balance}
         soundEnabled={soundEnabled}
         hasNotificationDot={hasRedDot}
+        isAuthenticated={Boolean(authSession)}
         onToggleSound={handleToggleSound}
         onOpenSidebar={() => setSidebarOpen(true)}
         onNavigateHome={navigateHome}
         onNavigateWallet={() => navigateToRoute('wallet')}
+        onNavigateLogin={() => navigateToRoute('login')}
         onLeaveRoom={navigateHome}
         onOpenGuide={() => setGuideOpen(true)}
         onOpenNotifications={() => setNotificationsOpen(true)}
@@ -1201,6 +1316,8 @@ export default function App() {
             mode="deposit"
             balance={wallet.balance}
             transactions={wallet.transactions}
+            playerName={playerName}
+            authToken={authSession?.token ?? null}
             playerDeposits={playerDeposits}
             onProceedToDepositPay={handleProceedToDepositPay}
             onTransaction={handleWalletTransaction}
@@ -1219,6 +1336,8 @@ export default function App() {
             mode="withdraw"
             balance={wallet.balance}
             transactions={wallet.transactions}
+            playerName={playerName}
+            authToken={authSession?.token ?? null}
             onTransaction={handleWalletTransaction}
             onBackToWallet={() => navigateToRoute('wallet')}
           />
@@ -1227,9 +1346,13 @@ export default function App() {
             playerName={playerName}
             avatarId={avatarId}
             hub={hub}
+            authUser={authSession?.user ?? null}
             onSavePlayerName={handleSavePlayerName}
             onSaveAvatar={handleSaveAvatar}
             onOpenLeaderboard={() => navigateToRoute('leaderboard')}
+            onNavigateLogin={() => navigateToRoute('login')}
+            onNavigateSignup={() => navigateToRoute('signup')}
+            onLogout={handleLogout}
           />
         ) : view === 'history' ? (
           <HistoryPage
@@ -1280,8 +1403,10 @@ export default function App() {
         currentView={view}
         playerName={playerName}
         avatarId={avatarId}
+        authUser={authSession?.user ?? null}
         onClose={() => setSidebarOpen(false)}
         onNavigate={navigateToRoute}
+        onLogout={handleLogout}
       />
 
       <NotificationDrawer

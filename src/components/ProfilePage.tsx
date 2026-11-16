@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
-import { Check, Trophy } from 'lucide-react';
+import { Check, LogIn, LogOut, Phone, Trophy, UserPlus } from 'lucide-react';
 import { AVATAR_OPTIONS } from '../assets/avatars';
+import { formatIndianMobile, type AuthUserAccount } from '../shared/auth';
 import {
   validatePlayerName,
   type AvatarId,
@@ -13,18 +14,26 @@ interface ProfilePageProps {
   playerName: string;
   avatarId: AvatarId;
   hub: HubSnapshot;
+  authUser?: AuthUserAccount | null;
   onSavePlayerName: (name: string) => void;
   onSaveAvatar: (avatarId: AvatarId) => void;
   onOpenLeaderboard: () => void;
+  onNavigateLogin?: () => void;
+  onNavigateSignup?: () => void;
+  onLogout?: () => void;
 }
 
 export function ProfilePage({
   playerName,
   avatarId,
   hub,
+  authUser,
   onSavePlayerName,
   onSaveAvatar,
   onOpenLeaderboard,
+  onNavigateLogin,
+  onNavigateSignup,
+  onLogout,
 }: ProfilePageProps) {
   const [nameInput, setNameInput] = useState(playerName);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -59,12 +68,60 @@ export function ProfilePage({
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-12 items-stretch">
         <section className="min-w-0 md:col-span-7 rounded-2xl bg-gradient-to-b from-[#FCE6D2] via-[#F7BE8A] to-[#EE8E42] p-5 sm:p-6 shadow-peach-card space-y-5">
-          <div className="flex items-center gap-3.5">
-            <PlayerAvatar name={playerName} avatarId={avatarId} size="lg" />
-            <div className="min-w-0">
-              <h2 className="truncate font-display text-lg font-bold text-[#16181D]">{playerName}</h2>
-              <p className="text-xs text-[#3F2915]">Active Ludo Classic Player</p>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3.5 min-w-0">
+              <PlayerAvatar name={playerName} avatarId={avatarId} size="lg" />
+              <div className="min-w-0">
+                <h2 className="truncate font-display text-lg font-bold text-[#16181D]">{playerName}</h2>
+                <p className="flex items-center gap-1.5 text-xs text-[#3F2915] tabular-nums">
+                  {authUser ? (
+                    <>
+                      <Phone className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      <span>{formatIndianMobile(authUser.mobile)} · Verified</span>
+                    </>
+                  ) : (
+                    <span>Guest Player · Verify mobile via OTP</span>
+                  )}
+                </p>
+              </div>
             </div>
+
+            {authUser ? (
+              <button
+                type="button"
+                onClick={onLogout}
+                data-testid="profile-logout-btn"
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-full bg-white/90 px-3.5 py-2 text-xs font-bold text-[#991B1B] shadow-pill-btn hover:bg-white whitespace-nowrap shrink-0"
+              >
+                <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Logout</span>
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 shrink-0">
+                {onNavigateLogin && (
+                  <button
+                    type="button"
+                    onClick={onNavigateLogin}
+                    data-testid="profile-login-btn"
+                    className="inline-flex min-h-[40px] items-center gap-1.5 rounded-full bg-white/90 px-3.5 py-2 text-xs font-bold text-[#16181D] shadow-pill-btn hover:bg-white whitespace-nowrap"
+                  >
+                    <LogIn className="h-3.5 w-3.5 text-[#0D7A5F]" aria-hidden="true" />
+                    <span>Login</span>
+                  </button>
+                )}
+                {onNavigateSignup && (
+                  <button
+                    type="button"
+                    onClick={onNavigateSignup}
+                    data-testid="profile-signup-btn"
+                    className="inline-flex min-h-[40px] items-center gap-1.5 rounded-full bg-[#16181D] px-3.5 py-2 text-xs font-bold text-white shadow-pill-btn hover:bg-[#2A2D35] whitespace-nowrap"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Sign Up</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">

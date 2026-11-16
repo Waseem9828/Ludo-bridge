@@ -5,6 +5,7 @@ import {
   countPlayerActiveBattles,
   createInitialResultReport,
   expireStaleOpenBattles,
+  isPlayerSeatedInRoom,
   MAX_ACTIVE_BATTLES_PER_PLAYER,
   normalizeLobbyCode,
   pickOpponentColor,
@@ -273,6 +274,9 @@ export function joinLobby(
         throw new Error(
           `You already have ${MAX_ACTIVE_BATTLES_PER_PLAYER} active battles. Finish or cancel one before joining another.`
         );
+      }
+      if (isPlayerSeatedInRoom(room, nameCheck.value)) {
+        throw new Error('You cannot join your own battle as an opponent.');
       }
       if (room.players.length >= 2) {
         throw new Error('This 2-player match room is already full.');

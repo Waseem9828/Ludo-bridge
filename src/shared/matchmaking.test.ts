@@ -27,6 +27,7 @@ import {
   getOpenBattleRemainingMs,
   getResultConfirmationState,
   isBattleResultPendingApproval,
+  isPlayerSeatedInRoom,
   isValidAvatarId,
   MAX_ACTIVE_BATTLES_PER_PLAYER,
   mergeAnimatedBattles,
@@ -188,13 +189,21 @@ test('expireStaleOpenBattles removes unjoined non-demo battles after 5 minutes w
     updatedAt: new Date(nowMs - OPEN_BATTLE_TTL_MS - 1000).toISOString(),
   };
 
+  store.rooms['DEMO_OK'] = {
+    ...store.rooms['USER_OK'],
+    code: 'DEMO_OK',
+    isDemo: true,
+    createdAt: new Date(nowMs - OPEN_BATTLE_TTL_MS - 1000).toISOString(),
+    updatedAt: new Date(nowMs - OPEN_BATTLE_TTL_MS - 1000).toISOString(),
+  };
+
   assert.equal(formatCountdownMMSS(getOpenBattleRemainingMs(store.rooms['USER_OK'], nowMs) ?? 0), '3:00');
   const expired = expireStaleOpenBattles(store.rooms, nowMs);
   assert.deepEqual(expired, ['USER_EXP']);
   assert.ok(store.rooms['USER_OK']);
   assert.equal(store.rooms['USER_EXP'], undefined);
   // Demo lobbies remain available
-  assert.ok(store.rooms['CL050A']);
+  assert.ok(store.rooms['DEMO_OK']);
 });
 
 test('validateWalletTransaction validates deposit and withdrawal rules', () => {
@@ -512,11 +521,11 @@ test('partitionLobbyBattles pins joined battle to top of Open Battles for both h
 test('createInitialMockStore and buildHubSnapshotFromStore expose seeded battles and history', () => {
   const store = createInitialMockStore(1_700_000_000_000);
   const snapshot = buildHubSnapshotFromStore(store);
-  assert.equal(snapshot.openLobbies.length, 8);
-  assert.equal(snapshot.runningBattles.length, 6);
+  assert.equal(snapshot.openLobbies.length, 0);
+  assert.equal(snapshot.runningBattles.length, 25);
   assert.equal(snapshot.recentMatches.length, 10);
-  assert.equal(snapshot.stats.openCount, 8);
-  assert.equal(snapshot.stats.activeMatchesCount, 6);
+  assert.equal(snapshot.stats.openCount, 0);
+  assert.equal(snapshot.stats.activeMatchesCount, 25);
   assert.equal(snapshot.stats.completedCount, 10);
 });
 
@@ -555,8 +564,8 @@ test('getMockLeaderboardData ranks players descending by earnings and includes c
 test('sumBattleAmounts sums seeded open and running battle amounts accurately', () => {
   const store = createInitialMockStore(1_700_000_000_000);
   const snapshot = buildHubSnapshotFromStore(store);
-  assert.equal(sumBattleAmounts(snapshot.openLobbies), 6100);
-  assert.equal(sumBattleAmounts(snapshot.runningBattles), 4050);
+  assert.equal(sumBattleAmounts(snapshot.openLobbies), 0);
+  assert.equal(sumBattleAmounts(snapshot.runningBattles), 18590);
   assert.equal(sumBattleAmounts([{ amount: 100 }, { amount: 250 }]), 350);
   assert.equal(sumBattleAmounts([]), 0);
 });
@@ -830,7 +839,7 @@ test('isBattleResultPendingApproval keeps submitted unapproved battles at top of
   const snap = buildHubSnapshotFromStore(store);
   assert.ok(snap.runningBattles.some((r) => r.code === 'RN100Z'));
   // Active matches count excludes completed pending-review rooms
-  assert.equal(snap.stats.activeMatchesCount, 5);
+  assert.equal(snap.stats.activeMatchesCount, 24);
 
   const loserPartition = partitionLobbyBattles({
     openLobbies: snap.openLobbies,
@@ -900,4 +909,19 @@ test('isBattleResultPendingApproval keeps submitted unapproved battles at top of
     false
   );
 });
+
+test('isPlayerSeatedInRoom detects host by playerId or case-insensitive name to prevent self-joining', () => {
+  const store = createInitialMockStore(1_700_000_000_000);
+  const room = {
+    ...store.rooms['RN100Z'],
+    players: [store.rooms['RN100Z'].players[0]],
+  };
+  const host = room.players[0];
+
+  assert.equal(isPlayerSeatedInRoom(room, host.name), true);
+  assert.equal(isPlayerSeatedInRoom(room, `  ${host.name.toLowerCase()}  `), true);
+  assert.equal(isPlayerSeatedInRoom(room, 'DifferentName', host.id), true);
+  assert.equal(isPlayerSeatedInRoom(room, 'TrueOpponent'), false);
+});
+
 

@@ -321,13 +321,17 @@ export function MatchmakerHub({
                   const isHostSide = participantId
                     ? host.id === participantId
                     : host.name.trim().toLowerCase() === playerName.trim().toLowerCase();
+                  const hostWaitingPlayerId =
+                    !isJoinedBattle && (ownPlayerId || isHostSide)
+                      ? (ownPlayerId ?? participantId ?? host.id)
+                      : null;
                   const displayPartner = isJoinedBattle
                     ? isHostSide
                       ? opp
                       : host
                     : host;
                   const isBusy = busyCode === lobby.code;
-                  const remainingMs = ownPlayerId
+                  const remainingMs = hostWaitingPlayerId
                     ? getOpenBattleRemainingMs(lobby, nowTick)
                     : null;
 
@@ -345,7 +349,7 @@ export function MatchmakerHub({
                         <PlayerAvatar
                           name={displayPartner?.name ?? host.name}
                           avatarId={
-                            !isJoinedBattle && (ownPlayerId || host.name === playerName)
+                            !isJoinedBattle && (hostWaitingPlayerId || host.name === playerName)
                               ? playerAvatarId
                               : undefined
                           }
@@ -372,7 +376,7 @@ export function MatchmakerHub({
                                   : ''}
                               </span>
                             </p>
-                          ) : ownPlayerId ? (
+                          ) : hostWaitingPlayerId ? (
                             <p className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-[#FCD34D] truncate tabular-nums">
                               <span
                                 data-testid="finding-player-spinner"
@@ -421,17 +425,31 @@ export function MatchmakerHub({
                           />
                           <span>Start</span>
                         </button>
-                      ) : ownPlayerId ? (
-                        <button
-                          type="button"
-                          disabled={isBusy}
-                          onClick={() => handleDeleteBattle(lobby.code, ownPlayerId)}
-                          aria-label={`Delete battle for ₹${lobby.amount}`}
-                          className="inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-full bg-white px-4 py-1.5 text-xs font-bold text-[#991B1B] shadow-pill-btn transition-colors hover:bg-[#FAF9F5] disabled:opacity-60 whitespace-nowrap shrink-0"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                          <span>{isBusy ? 'Deleting...' : 'Delete'}</span>
-                        </button>
+                      ) : hostWaitingPlayerId ? (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            data-testid={`open-battle-action-${lobby.code}`}
+                            data-state="host-waiting"
+                            onClick={() => onEnterBattle(lobby)}
+                            aria-label={`View match room for ₹${lobby.amount}`}
+                            className="inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-full bg-[#FCD34D] px-4 py-1.5 text-xs font-bold text-[#16181D] shadow-pill-btn transition-colors hover:bg-[#FBBF24] whitespace-nowrap shrink-0"
+                          >
+                            <Eye className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                            <span>View</span>
+                          </button>
+                          <button
+                            type="button"
+                            data-testid={`delete-battle-action-${lobby.code}`}
+                            disabled={isBusy}
+                            onClick={() => handleDeleteBattle(lobby.code, hostWaitingPlayerId)}
+                            aria-label={`Delete battle for ₹${lobby.amount}`}
+                            title="Delete battle"
+                            className="inline-flex h-[38px] w-[38px] items-center justify-center rounded-full bg-white text-[#991B1B] shadow-pill-btn transition-colors hover:bg-[#FAF9F5] disabled:opacity-60 shrink-0"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        </div>
                       ) : (
                         <button
                           type="button"

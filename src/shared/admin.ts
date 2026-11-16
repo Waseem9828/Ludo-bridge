@@ -726,6 +726,100 @@ export function submitDepositRequest(
   };
 }
 
+export function submitWithdrawalRequest(
+  admin: AdminStoreState,
+  params: {
+    playerName: string;
+    amount: number;
+    upiId: string;
+    maskedAadhaar?: string;
+  },
+  nowIso: string
+): { admin: AdminStoreState; withdrawal?: AdminWithdrawalRecord; error?: string } {
+  const cleanName = params.playerName.trim().replace(/\s+/g, ' ').slice(0, 24);
+  if (cleanName.length < 2) {
+    return { admin, error: 'Player name is required to request a withdrawal.' };
+  }
+
+  const amount = Math.round(Number(params.amount));
+  const minW = Math.max(10, admin.settings.minWithdrawal || 50);
+  const maxW = Math.max(minW, admin.settings.maxWithdrawal || 50000);
+  if (!Number.isFinite(amount) || amount < minW || amount > maxW) {
+    return {
+      admin,
+      error: `Withdrawal amount must be between ₹${minW} and ₹${maxW.toLocaleString('en-IN')}.`,
+    };
+  }
+
+  const cleanUpi = params.upiId.trim().slice(0, 60);
+  if (cleanUpi.length < 4 || !cleanUpi.includes('@')) {
+    return { admin, error: 'Enter a valid UPI ID (e.g. player@upi).' };
+  }
+
+  const feePct = Math.max(0, Math.min(15, Number(admin.settings.withdrawalFeePct || 0)));
+  const feeAmount = Math.round((amount * feePct) / 100);
+  const netPayable = Math.max(0, amount - feeAmount);
+
+  const existingPlayer = admin.players.find(
+    (p) => p.name.trim().toLowerCase() === cleanName.toLowerCase()
+  );
+  const playerId =
+    existingPlayer?.id ??
+    `plr-${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10) || 'player'}-${Date.now().toString(36).slice(-4)}`;
+
+  const nextPlayers = existingPlayer
+    ? admin.players
+    : [
+        {
+          id: playerId,
+          name: cleanName,
+          phoneOrTag: cleanUpi,
+          walletBalance: 0,
+          xp: 0,
+          level: 1,
+          matchesPlayed: 0,
+          wins: 0,
+          totalPenalties: 0,
+          status: 'active' as const,
+          joinedAt: nowIso,
+        },
+        ...admin.players,
+      ];
+
+  const withdrawal: AdminWithdrawalRecord = {
+    id: `WDR-${Math.floor(2100 + Math.random() * 7899)}`,
+    playerId,
+    playerName: existingPlayer?.name ?? cleanName,
+    amount,
+    feeAmount,
+    netPayable,
+    upiId: cleanUpi,
+    status: 'pending',
+    note: params.maskedAadhaar
+      ? `Aadhaar KYC Verified (${params.maskedAadhaar})`
+      : 'Aadhaar KYC Verified',
+    createdAt: nowIso,
+  };
+
+  const audit: AdminAuditEntry = {
+    id: `AUD-${Date.now().toString(36)}`,
+    category: 'withdrawal',
+    action: 'Withdrawal Requested',
+    detail: `${withdrawal.id} · ₹${amount.toLocaleString('en-IN')} to ${cleanUpi} by ${withdrawal.playerName}`,
+    createdAt: nowIso,
+  };
+
+  return {
+    withdrawal,
+    admin: {
+      ...admin,
+      players: nextPlayers,
+      withdrawals: [withdrawal, ...admin.withdrawals],
+      auditLogs: [audit, ...admin.auditLogs].slice(0, 80),
+    },
+  };
+}
+
 export function applyAdminWithdrawalAction(
   admin: AdminStoreState,
   withdrawalId: string,

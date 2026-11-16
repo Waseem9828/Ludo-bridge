@@ -9,60 +9,19 @@ import {
   createInitialAdminStore,
   type AdminStoreState,
 } from './admin';
+import type { AuthStoreState } from './auth';
+import type { KycStoreState } from './imbAadhaarKyc';
 
 export interface StoreState {
   rooms: Record<string, MatchRoom>;
   recentMatches: CompletedMatchRecord[];
   adminState?: AdminStoreState;
+  authState?: AuthStoreState;
+  kycState?: KycStoreState;
 }
 
 export function createInitialMockStore(now = Date.now()): StoreState {
   const iso = (offsetMs: number) => new Date(now - offsetMs).toISOString();
-
-  const makeOpenRoom = (
-    code: string,
-    amount: number,
-    playerName: string,
-    playerId: string,
-    color: TokenColor,
-    offsetMs: number
-  ): MatchRoom => ({
-    code,
-    visibility: 'open',
-    mode: 'Classic',
-    amount,
-    stakesLabel: amount >= 1000 ? '1000 Pts' : amount >= 250 ? '500 Pts' : '100 Pts',
-    bestOf: 1,
-    createdAt: iso(offsetMs),
-    updatedAt: iso(offsetMs),
-    status: 'waiting',
-    ludoKingRoomCode: null,
-    players: [
-      {
-        id: playerId,
-        name: playerName,
-        color,
-        isHost: true,
-        readyInApp: false,
-        connected: false,
-        joinedAt: iso(offsetMs),
-      },
-    ],
-    winnerId: null,
-    winnerName: null,
-    roundNumber: 1,
-    isDemo: true,
-    messages: [
-      {
-        id: `msg-${code.toLowerCase()}`,
-        senderId: 'system',
-        senderName: 'Matchmaker',
-        text: `${playerName} opened a public 1v1 Classic lobby.`,
-        kind: 'system',
-        createdAt: iso(offsetMs),
-      },
-    ],
-  });
 
   const makeRunningRoom = (
     code: string,
@@ -102,6 +61,7 @@ export function createInitialMockStore(now = Date.now()): StoreState {
     winnerId: null,
     winnerName: null,
     roundNumber: 1,
+    isDemo: true,
     messages: [
       {
         id: `msg-${code.toLowerCase()}-1`,
@@ -130,16 +90,7 @@ export function createInitialMockStore(now = Date.now()): StoreState {
     ],
   });
 
-  const openLobbies: MatchRoom[] = [
-    makeOpenRoom('CL050A', 50, 'Meera', 'mock-meera', 'Yellow', 45000),
-    makeOpenRoom('CL100A', 100, 'Rahul', 'mock-rahul', 'Red', 90000),
-    makeOpenRoom('CL200B', 200, 'Ananya', 'mock-ananya', 'Green', 120000),
-    makeOpenRoom('CL250B', 250, 'Priya', 'mock-priya', 'Green', 150000),
-    makeOpenRoom('CL500C', 500, 'Kabir', 'mock-kabir', 'Blue', 180000),
-    makeOpenRoom('CL1000', 1000, 'Rohan', 'mock-rohan', 'Red', 210000),
-    makeOpenRoom('CL1500', 1500, 'Sneha', 'mock-sneha', 'Yellow', 240000),
-    makeOpenRoom('CL2500', 2500, 'Arjun', 'mock-arjun', 'Blue', 270000),
-  ];
+  const openLobbies: MatchRoom[] = [];
 
   const runningBattles: MatchRoom[] = [
     makeRunningRoom(
@@ -195,6 +146,177 @@ export function createInitialMockStore(now = Date.now()): StoreState {
       { id: 'mock-pooja', name: 'Pooja', color: 'Green' },
       600000,
       175000
+    ),
+    makeRunningRoom(
+      'RN020A',
+      20,
+      '01482930',
+      { id: 'mock-aman', name: 'Aman', color: 'Red' },
+      { id: 'mock-riya', name: 'Riya', color: 'Yellow' },
+      620000,
+      195000
+    ),
+    makeRunningRoom(
+      'RN030B',
+      30,
+      '02593841',
+      { id: 'mock-yash', name: 'Yash', color: 'Green' },
+      { id: 'mock-naina', name: 'Naina', color: 'Blue' },
+      640000,
+      215000
+    ),
+    makeRunningRoom(
+      'RN050C',
+      50,
+      '03604952',
+      { id: 'mock-meera', name: 'Meera', color: 'Yellow' },
+      { id: 'mock-harsh', name: 'Harsh', color: 'Red' },
+      660000,
+      235000
+    ),
+    makeRunningRoom(
+      'RN060D',
+      60,
+      '04715063',
+      { id: 'mock-kunal', name: 'Kunal', color: 'Blue' },
+      { id: 'mock-tara', name: 'Tara', color: 'Green' },
+      680000,
+      255000
+    ),
+    makeRunningRoom(
+      'RN080E',
+      80,
+      '05826174',
+      { id: 'mock-sahil', name: 'Sahil', color: 'Red' },
+      { id: 'mock-sana', name: 'Sana', color: 'Yellow' },
+      700000,
+      275000
+    ),
+    makeRunningRoom(
+      'RN120F',
+      120,
+      '06937285',
+      { id: 'mock-rahul', name: 'Rahul', color: 'Green' },
+      { id: 'mock-ananya', name: 'Ananya', color: 'Blue' },
+      720000,
+      295000
+    ),
+    makeRunningRoom(
+      'RN180G',
+      180,
+      '07048396',
+      { id: 'mock-vivek', name: 'Vivek', color: 'Red' },
+      { id: 'mock-diya', name: 'Diya', color: 'Yellow' },
+      740000,
+      315000
+    ),
+    makeRunningRoom(
+      'RN200H',
+      200,
+      '08159407',
+      { id: 'mock-kabir', name: 'Kabir', color: 'Blue' },
+      { id: 'mock-priya', name: 'Priya', color: 'Green' },
+      760000,
+      335000
+    ),
+    makeRunningRoom(
+      'RN250J',
+      250,
+      '09260518',
+      { id: 'mock-rohan', name: 'Rohan', color: 'Red' },
+      { id: 'mock-sneha', name: 'Sneha', color: 'Yellow' },
+      780000,
+      355000
+    ),
+    makeRunningRoom(
+      'RN350L',
+      350,
+      '01371629',
+      { id: 'mock-arjun', name: 'Arjun', color: 'Green' },
+      { id: 'mock-komal', name: 'Komal', color: 'Blue' },
+      800000,
+      375000
+    ),
+    makeRunningRoom(
+      'RN400M',
+      400,
+      '02482730',
+      { id: 'mock-nikhil', name: 'Nikhil', color: 'Red' },
+      { id: 'mock-isha', name: 'Isha', color: 'Yellow' },
+      820000,
+      395000
+    ),
+    makeRunningRoom(
+      'RN450N',
+      450,
+      '03593841',
+      { id: 'mock-manav', name: 'Manav', color: 'Blue' },
+      { id: 'mock-aarti', name: 'Aarti', color: 'Green' },
+      840000,
+      415000
+    ),
+    makeRunningRoom(
+      'RN600P',
+      600,
+      '04604952',
+      { id: 'mock-pranav', name: 'Pranav', color: 'Red' },
+      { id: 'mock-aditi', name: 'Aditi', color: 'Yellow' },
+      860000,
+      435000
+    ),
+    makeRunningRoom(
+      'RN750Q',
+      750,
+      '05715063',
+      { id: 'mock-varun', name: 'Varun', color: 'Green' },
+      { id: 'mock-shruti', name: 'Shruti', color: 'Blue' },
+      880000,
+      455000
+    ),
+    makeRunningRoom(
+      'RN800R',
+      800,
+      '06826174',
+      { id: 'mock-omkar', name: 'Omkar', color: 'Red' },
+      { id: 'mock-palak', name: 'Palak', color: 'Yellow' },
+      900000,
+      475000
+    ),
+    makeRunningRoom(
+      'RN1200',
+      1200,
+      '07937285',
+      { id: 'mock-tushar', name: 'Tushar', color: 'Blue' },
+      { id: 'mock-mansi', name: 'Mansi', color: 'Green' },
+      920000,
+      495000
+    ),
+    makeRunningRoom(
+      'RN1500',
+      1500,
+      '08048396',
+      { id: 'mock-deepak', name: 'Deepak', color: 'Red' },
+      { id: 'mock-kirti', name: 'Kirti', color: 'Yellow' },
+      940000,
+      515000
+    ),
+    makeRunningRoom(
+      'RN2500',
+      2500,
+      '09159407',
+      { id: 'mock-gaurav', name: 'Gaurav', color: 'Green' },
+      { id: 'mock-simran', name: 'Simran', color: 'Blue' },
+      960000,
+      535000
+    ),
+    makeRunningRoom(
+      'RN5000',
+      5000,
+      '01260518',
+      { id: 'mock-rajat', name: 'Rajat', color: 'Red' },
+      { id: 'mock-bhavna', name: 'Bhavna', color: 'Yellow' },
+      980000,
+      555000
     ),
   ];
 
@@ -386,7 +508,7 @@ export function buildHubSnapshotFromStore(store: StoreState): HubSnapshot {
         (room.status !== 'completed' || isBattleResultPendingApproval(room))
     )
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, 12);
+    .slice(0, 50);
 
   return {
     openLobbies,

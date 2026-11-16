@@ -1,4 +1,5 @@
-import express from 'express';
+import 'dotenv/config';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
@@ -11,6 +12,7 @@ import {
   countPlayerActiveBattles,
   createInitialResultReport,
   expireStaleOpenBattles,
+  isPlayerSeatedInRoom,
   MAX_ACTIVE_BATTLES_PER_PLAYER,
   normalizeLobbyCode,
   pickOpponentColor,
@@ -40,12 +42,44 @@ import {
   ensureAdminStore,
   imposeAdminPenalty,
   submitDepositRequest,
+  submitWithdrawalRequest,
   updateAdminPlayer,
   waiveAdminPenalty,
   type AdminDashboardSnapshot,
   type AdminLevelConfig,
   type AdminStoreState,
 } from './src/shared/admin';
+import {
+  ensureAuthStore,
+  formatIndianMobile,
+  pruneExpiredAuthArtifacts,
+  requestOtpForMobile,
+  verifyOtpForMobile,
+  type AuthStoreState,
+  type AuthUserAccount,
+  type OtpAuthIntent,
+} from './src/shared/auth';
+import {
+  getImbCredentialsFromEnv,
+  IMB_DEFAULT_BASE_URL,
+  normalizeOtpChannel,
+  sendImbOtp,
+} from './src/shared/imbCommunications';
+import {
+  AADHAAR_OTP_EXPIRY_MS,
+  AADHAAR_OTP_MAX_ATTEMPTS,
+  AADHAAR_OTP_RESEND_COOLDOWN_MS,
+  canWithdrawWithKyc,
+  ensureKycStore,
+  getPlayerKycKey,
+  normalizeAadhaarNumber,
+  sendImbAadhaarOtp,
+  validateAadhaarOtp,
+  verifyImbAadhaarOtp,
+  type AadhaarKycProfile,
+  type KycStoreState,
+} from './src/shared/imbAadhaarKyc';
+import { SlidingWindowRateLimiter } from './src/shared/rateLimit';
 
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = path.resolve(process.cwd(), '.data');
@@ -72,6 +106,8 @@ function loadStore(): StoreState {
           ? parsed.recentMatches.slice(0, 30)
           : [],
         adminState: ensureAdminStore(parsed.adminState),
+        authState: ensureAuthStore(parsed.authState),
+        kycState: ensureKycStore(parsed.kycState),
       };
     }
   } catch (err) {
@@ -84,13 +120,24 @@ const store: StoreState = loadStore();
 if (!store.adminState) {
   store.adminState = ensureAdminStore(null);
 }
+if (!store.authState) {
+  store.authState = ensureAuthStore(null);
+}
+if (!store.kycState) {
+  store.kycState = ensureKycStore(null);
+}
 
 function persistStore(): void {
   try {
+    if (store.authState) {
+      store.authState = pruneExpiredAuthArtifacts(store.authState, Date.now());
+    }
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), 'utf-8');
+    const tempPath = `${STORE_PATH}.${process.pid}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(store, null, 2), 'utf-8');
+    fs.renameSync(tempPath, STORE_PATH);
   } catch (err) {
     console.error('Failed to persist matchmaking store:', err);
   }
@@ -135,6 +182,76 @@ function getAdminStore(): AdminStoreState {
     store.adminState = ensureAdminStore(null);
   }
   return store.adminState;
+}
+
+function getAuthStore(): AuthStoreState {
+  if (!store.authState) {
+    store.authState = ensureAuthStore(null);
+  }
+  return store.authState;
+}
+
+function getKycStore(): KycStoreState {
+  if (!store.kycState) {
+    store.kycState = ensureKycStore(null);
+  }
+  return store.kycState;
+}
+
+function resolveAuthenticatedUser(req: Request): AuthUserAccount | null {
+  const rawAuth =
+    (typeof req.headers['x-auth-token'] === 'string'
+      ? req.headers['x-auth-token']
+      : req.headers.authorization?.replace(/^Bearer\s+/i, '')) ?? '';
+  const token = rawAuth.trim();
+  if (!token) return null;
+  const auth = getAuthStore();
+  const session = auth.sessions[token];
+  if (!session) return null;
+  return auth.usersByMobile[session.mobile] ?? null;
+}
+
+function resolveKycPlayerContext(
+  req: Request,
+  playerNameHint?: unknown
+): { playerKey: string; playerName: string } {
+  const user = resolveAuthenticatedUser(req);
+  const rawName = typeof playerNameHint === 'string' ? playerNameHint.trim() : '';
+  const playerName = user?.name || rawName || 'Player';
+  const playerKey = getPlayerKycKey({
+    userId: user?.id,
+    mobile: user?.mobile,
+    playerName,
+  });
+  return { playerKey, playerName };
+}
+
+function syncUserToAdminPlayers(user: AuthUserAccount): void {
+  const admin = getAdminStore();
+  const formattedPhone = formatIndianMobile(user.mobile);
+  const existing = admin.players.find(
+    (p) =>
+      p.id === user.id ||
+      p.phoneOrTag === formattedPhone ||
+      p.phoneOrTag === user.mobile
+  );
+  if (existing) {
+    existing.name = user.name;
+    return;
+  }
+  admin.players.unshift({
+    id: user.id,
+    name: user.name,
+    phoneOrTag: formattedPhone,
+    walletBalance: 0,
+    xp: 0,
+    level: 1,
+    matchesPlayed: 0,
+    wins: 0,
+    totalPenalties: 0,
+    status: 'active',
+    joinedAt: user.createdAt,
+  });
 }
 
 function buildAdminSnapshot(): AdminDashboardSnapshot {
@@ -264,10 +381,50 @@ function parseVisibility(raw: unknown): LobbyVisibility {
 
 async function startServer() {
   const app = express();
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
+
+  const otpSendLimiter = new SlidingWindowRateLimiter(10, 10 * 60 * 1000);
+  const otpVerifyLimiter = new SlidingWindowRateLimiter(20, 10 * 60 * 1000);
+  const kycOtpLimiter = new SlidingWindowRateLimiter(8, 10 * 60 * 1000);
+  const apiWriteLimiter = new SlidingWindowRateLimiter(120, 60 * 1000);
+
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-DNS-Prefetch-Control', 'off');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    if (process.env.NODE_ENV === 'production' && req.secure) {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+    next();
+  });
+
+  app.use('/api', (req, res, next) => {
+    if (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE') {
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      const decision = apiWriteLimiter.consume(`write:${clientIp}`);
+      if (!decision.allowed) {
+        res.setHeader('Retry-After', String(decision.retryAfterSeconds));
+        res.status(429).json({
+          error: `Too many requests. Please try again in ${decision.retryAfterSeconds}s.`,
+        });
+        return;
+      }
+    }
+    next();
+  });
+
   app.use(express.json({ limit: '2mb' }));
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      status: 'healthy',
+      environment: process.env.NODE_ENV || 'development',
+      uptimeSeconds: Math.round(process.uptime()),
+      timestamp: new Date().toISOString(),
+    });
   });
 
   app.get('/api/lobbies', (_req, res) => {
@@ -382,7 +539,8 @@ async function startServer() {
           room.visibility === 'open' &&
           room.players.length === 1 &&
           room.status === 'waiting' &&
-          room.mode === mode
+          room.mode === mode &&
+          !isPlayerSeatedInRoom(room, nameCheck.value)
       )
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
 
@@ -494,6 +652,11 @@ async function startServer() {
       res.status(400).json({
         error: `You already have ${MAX_ACTIVE_BATTLES_PER_PLAYER} active battles. Finish or cancel one before joining another.`,
       });
+      return;
+    }
+
+    if (isPlayerSeatedInRoom(room, nameCheck.value, req.body?.playerId)) {
+      res.status(400).json({ error: 'You cannot join your own battle as an opponent.' });
       return;
     }
 
@@ -1359,6 +1522,517 @@ async function startServer() {
     res.json(buildAdminSnapshot());
   });
 
+  app.get('/api/auth/channels', (_req, res) => {
+    const imbCredentials = getImbCredentialsFromEnv();
+    const defaultChannel = normalizeOtpChannel(process.env.IMB_DEFAULT_OTP_CHANNEL);
+    res.json({
+      imbConfigured: Boolean(imbCredentials),
+      defaultChannel,
+      supportedChannels: ['sms', 'whatsapp'],
+    });
+  });
+
+  app.post('/api/auth/send-otp', async (req, res) => {
+    const mobile = String(req.body?.mobile ?? '');
+    const intent: OtpAuthIntent =
+      req.body?.intent === 'signup' ? 'signup' : 'login';
+    const channel = normalizeOtpChannel(
+      req.body?.channel ?? process.env.IMB_DEFAULT_OTP_CHANNEL
+    );
+
+    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+    const rateDecision = otpSendLimiter.consume(`otp-send:${clientIp}:${mobile.slice(-10)}`);
+    if (!rateDecision.allowed) {
+      res.setHeader('Retry-After', String(rateDecision.retryAfterSeconds));
+      res.status(429).json({
+        error: `Too many OTP requests. Please wait ${rateDecision.retryAfterSeconds}s.`,
+        retryAfterSeconds: rateDecision.retryAfterSeconds,
+      });
+      return;
+    }
+
+    const auth = getAuthStore();
+    const result = requestOtpForMobile(
+      auth,
+      { mobile, intent },
+      Date.now(),
+      () => String(crypto.randomInt(100000, 1000000))
+    );
+
+    if (!result.ok) {
+      res.status(400).json({
+        error: result.error,
+        retryAfterSeconds: result.retryAfterSeconds,
+      });
+      return;
+    }
+
+    const imbCredentials = getImbCredentialsFromEnv();
+    if (imbCredentials) {
+      const imbResult = await sendImbOtp({
+        mobile: result.challenge.mobile,
+        otpCode: result.challenge.code,
+        channel,
+        credentials: imbCredentials,
+        baseUrl: process.env.IMB_BASE_URL || IMB_DEFAULT_BASE_URL,
+      });
+
+      if (!imbResult.delivered) {
+        console.error(
+          `IMB ${channel.toUpperCase()} OTP delivery failed (${imbResult.errorCode}): ${imbResult.error}`
+        );
+        const status = imbResult.statusCode >= 500 ? 502 : 400;
+        res.status(status).json({
+          error: imbResult.error,
+          errorCode: imbResult.errorCode,
+        });
+        return;
+      }
+
+      store.authState = result.state;
+      persistStore();
+
+      const includePreviewWithImb =
+        process.env.ENABLE_IN_APP_OTP_PREVIEW === 'true' &&
+        process.env.NODE_ENV !== 'production';
+
+      res.json({
+        ok: true,
+        mobile: result.challenge.mobile,
+        formattedMobile: result.formattedMobile,
+        intent: result.challenge.intent,
+        channel,
+        deliveryProvider: 'imb',
+        messageId: imbResult.messageId,
+        deliveryStatus: imbResult.deliveryStatus,
+        expiresInSeconds: 300,
+        resendCooldownSeconds: 30,
+        ...(includePreviewWithImb ? { otpPreview: result.challenge.code } : {}),
+      });
+      return;
+    }
+
+    store.authState = result.state;
+    persistStore();
+
+    const webhookUrl = process.env.OTP_WEBHOOK_URL?.trim();
+    if (webhookUrl) {
+      fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mobile: result.challenge.mobile,
+          formattedMobile: result.formattedMobile,
+          otp: result.challenge.code,
+          intent: result.challenge.intent,
+          channel,
+        }),
+      }).catch((err) => {
+        console.error('OTP webhook dispatch failed:', err);
+      });
+    }
+
+    const includeOtpPreview = process.env.ENABLE_IN_APP_OTP_PREVIEW !== 'false';
+    res.json({
+      ok: true,
+      mobile: result.challenge.mobile,
+      formattedMobile: result.formattedMobile,
+      intent: result.challenge.intent,
+      channel,
+      deliveryProvider: 'preview',
+      deliveryStatus: 'queued',
+      expiresInSeconds: 300,
+      resendCooldownSeconds: 30,
+      ...(includeOtpPreview ? { otpPreview: result.challenge.code } : {}),
+    });
+  });
+
+  app.post('/api/auth/verify-otp', (req, res) => {
+    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+    const rateDecision = otpVerifyLimiter.consume(`otp-verify:${clientIp}`);
+    if (!rateDecision.allowed) {
+      res.setHeader('Retry-After', String(rateDecision.retryAfterSeconds));
+      res.status(429).json({
+        error: `Too many verification attempts. Try again in ${rateDecision.retryAfterSeconds}s.`,
+      });
+      return;
+    }
+
+    const mobile = String(req.body?.mobile ?? '');
+    const otp = String(req.body?.otp ?? '');
+    const intent: OtpAuthIntent =
+      req.body?.intent === 'signup' ? 'signup' : 'login';
+    const name = typeof req.body?.name === 'string' ? req.body.name : undefined;
+    const avatarId =
+      typeof req.body?.avatarId === 'string' ? req.body.avatarId : undefined;
+    const referralCode =
+      typeof req.body?.referralCode === 'string'
+        ? req.body.referralCode
+        : undefined;
+
+    const auth = getAuthStore();
+    const result = verifyOtpForMobile(
+      auth,
+      { mobile, otp, intent, name, avatarId, referralCode },
+      Date.now(),
+      (prefix) =>
+        prefix === 'sess'
+          ? `sess-${crypto.randomBytes(18).toString('hex')}`
+          : createId(prefix)
+    );
+
+    store.authState = result.state;
+    if (!result.ok) {
+      persistStore();
+      res.status(400).json({ error: result.error });
+      return;
+    }
+
+    syncUserToAdminPlayers(result.user);
+    persistStore();
+    res.json({
+      ok: true,
+      user: result.user,
+      token: result.token,
+    });
+  });
+
+  app.get('/api/auth/me', (req, res) => {
+    const rawAuth =
+      (typeof req.headers['x-auth-token'] === 'string'
+        ? req.headers['x-auth-token']
+        : req.headers.authorization?.replace(/^Bearer\s+/i, '')) ?? '';
+    const token = rawAuth.trim();
+    if (!token) {
+      res.status(401).json({ error: 'Not authenticated.' });
+      return;
+    }
+    const auth = getAuthStore();
+    const session = auth.sessions[token];
+    if (!session) {
+      res.status(401).json({ error: 'Session expired. Please login again.' });
+      return;
+    }
+    const user = auth.usersByMobile[session.mobile];
+    if (!user) {
+      res.status(401).json({ error: 'Account no longer exists.' });
+      return;
+    }
+    res.json({ user, token });
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    const rawAuth =
+      (typeof req.headers['x-auth-token'] === 'string'
+        ? req.headers['x-auth-token']
+        : req.headers.authorization?.replace(/^Bearer\s+/i, '')) ?? '';
+    const token = rawAuth.trim();
+    const auth = getAuthStore();
+    if (token && auth.sessions[token]) {
+      delete auth.sessions[token];
+      persistStore();
+    }
+    res.json({ ok: true });
+  });
+
+  // --- Aadhaar e-KYC & Withdrawal API ---
+  app.get('/api/kyc/status', (req, res) => {
+    const kyc = getKycStore();
+    const { playerKey } = resolveKycPlayerContext(req, req.query?.playerName);
+    const profile = kyc.verifiedByKey[playerKey] ?? null;
+    res.json({
+      imbConfigured: Boolean(getImbCredentialsFromEnv()),
+      verified: Boolean(profile?.verified),
+      profile,
+    });
+  });
+
+  app.post('/api/kyc/aadhaar/send-otp', async (req, res) => {
+    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+    const rateDecision = kycOtpLimiter.consume(`kyc-send:${clientIp}`);
+    if (!rateDecision.allowed) {
+      res.setHeader('Retry-After', String(rateDecision.retryAfterSeconds));
+      res.status(429).json({
+        error: `Too many Aadhaar OTP requests. Please wait ${rateDecision.retryAfterSeconds}s.`,
+      });
+      return;
+    }
+
+    const aadhaarCheck = normalizeAadhaarNumber(String(req.body?.aadhaarNumber ?? ''));
+    if (!aadhaarCheck.valid) {
+      res.status(400).json({ error: aadhaarCheck.error });
+      return;
+    }
+
+    const kyc = getKycStore();
+    const { playerKey } = resolveKycPlayerContext(req, req.body?.playerName);
+    const nowMs = Date.now();
+    const existingChallenge = kyc.challengesByKey[playerKey];
+    if (
+      existingChallenge &&
+      existingChallenge.aadhaarNumber === aadhaarCheck.value &&
+      nowMs < existingChallenge.resendAvailableAtMs &&
+      nowMs < existingChallenge.expiresAtMs
+    ) {
+      const waitSec = Math.max(
+        1,
+        Math.ceil((existingChallenge.resendAvailableAtMs - nowMs) / 1000)
+      );
+      res.status(429).json({
+        error: `Please wait ${waitSec}s before requesting another Aadhaar OTP.`,
+        retryAfterSeconds: waitSec,
+      });
+      return;
+    }
+
+    const imbCredentials = getImbCredentialsFromEnv();
+    if (imbCredentials) {
+      const imbResult = await sendImbAadhaarOtp({
+        aadhaarNumber: aadhaarCheck.value,
+        credentials: imbCredentials,
+        baseUrl: process.env.IMB_BASE_URL || IMB_DEFAULT_BASE_URL,
+      });
+      if (!imbResult.sent) {
+        console.error(
+          `IMB Aadhaar send-otp failed (${imbResult.errorCode}): ${imbResult.error}`
+        );
+        res.status(imbResult.statusCode >= 500 ? 502 : 400).json({
+          error: imbResult.error,
+          errorCode: imbResult.errorCode,
+        });
+        return;
+      }
+
+      kyc.challengesByKey[playerKey] = {
+        playerKey,
+        provider: 'imb',
+        requestId: imbResult.requestId,
+        aadhaarNumber: aadhaarCheck.value,
+        maskedAadhaar: imbResult.maskedAadhaar,
+        expiresAtMs: nowMs + AADHAAR_OTP_EXPIRY_MS,
+        resendAvailableAtMs: nowMs + AADHAAR_OTP_RESEND_COOLDOWN_MS,
+        attempts: 0,
+        createdAtMs: nowMs,
+      };
+      persistStore();
+
+      res.json({
+        ok: true,
+        provider: 'imb',
+        requestId: imbResult.requestId,
+        maskedAadhaar: imbResult.maskedAadhaar,
+        expiresInSeconds: 300,
+        resendCooldownSeconds: 30,
+      });
+      return;
+    }
+
+    const requestId = `ADHRVFR${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const otpCode = String(crypto.randomInt(100000, 1000000));
+    kyc.challengesByKey[playerKey] = {
+      playerKey,
+      provider: 'preview',
+      requestId,
+      aadhaarNumber: aadhaarCheck.value,
+      maskedAadhaar: aadhaarCheck.masked,
+      otpCode,
+      expiresAtMs: nowMs + AADHAAR_OTP_EXPIRY_MS,
+      resendAvailableAtMs: nowMs + AADHAAR_OTP_RESEND_COOLDOWN_MS,
+      attempts: 0,
+      createdAtMs: nowMs,
+    };
+    persistStore();
+
+    const includeOtpPreview = process.env.ENABLE_IN_APP_OTP_PREVIEW !== 'false';
+    res.json({
+      ok: true,
+      provider: 'preview',
+      requestId,
+      maskedAadhaar: aadhaarCheck.masked,
+      expiresInSeconds: 300,
+      resendCooldownSeconds: 30,
+      ...(includeOtpPreview ? { otpPreview: otpCode } : {}),
+    });
+  });
+
+  app.post('/api/kyc/aadhaar/verify-otp', async (req, res) => {
+    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+    const rateDecision = otpVerifyLimiter.consume(`kyc-verify:${clientIp}`);
+    if (!rateDecision.allowed) {
+      res.setHeader('Retry-After', String(rateDecision.retryAfterSeconds));
+      res.status(429).json({
+        error: `Too many Aadhaar verification attempts. Try again in ${rateDecision.retryAfterSeconds}s.`,
+      });
+      return;
+    }
+
+    const aadhaarCheck = normalizeAadhaarNumber(String(req.body?.aadhaarNumber ?? ''));
+    if (!aadhaarCheck.valid) {
+      res.status(400).json({ error: aadhaarCheck.error });
+      return;
+    }
+    const otpCheck = validateAadhaarOtp(String(req.body?.otp ?? ''));
+    if (!otpCheck.valid) {
+      res.status(400).json({ error: otpCheck.error });
+      return;
+    }
+
+    const kyc = getKycStore();
+    const { playerKey, playerName } = resolveKycPlayerContext(req, req.body?.playerName);
+    const challenge = kyc.challengesByKey[playerKey];
+    const requestId = String(req.body?.requestId ?? challenge?.requestId ?? '').trim();
+    const nowMs = Date.now();
+
+    if (!challenge || challenge.aadhaarNumber !== aadhaarCheck.value) {
+      res.status(400).json({
+        error: 'Request an Aadhaar OTP first for this Aadhaar number.',
+      });
+      return;
+    }
+
+    if (nowMs > challenge.expiresAtMs) {
+      delete kyc.challengesByKey[playerKey];
+      persistStore();
+      res.status(400).json({
+        error: 'Aadhaar OTP expired. Please request a fresh OTP.',
+      });
+      return;
+    }
+
+    if (challenge.attempts >= AADHAAR_OTP_MAX_ATTEMPTS) {
+      res.status(400).json({
+        error: 'Too many incorrect Aadhaar OTP attempts. Request a new OTP.',
+      });
+      return;
+    }
+
+    const imbCredentials = getImbCredentialsFromEnv();
+    if (challenge.provider === 'imb' && imbCredentials) {
+      const verifyResult = await verifyImbAadhaarOtp({
+        requestId: challenge.requestId || requestId,
+        otp: otpCheck.value,
+        aadhaarNumber: aadhaarCheck.value,
+        credentials: imbCredentials,
+        baseUrl: process.env.IMB_BASE_URL || IMB_DEFAULT_BASE_URL,
+      });
+
+      if (!verifyResult.verified) {
+        challenge.attempts += 1;
+        persistStore();
+        res.status(verifyResult.statusCode >= 500 ? 502 : 400).json({
+          error: verifyResult.error,
+          errorCode: verifyResult.errorCode,
+        });
+        return;
+      }
+
+      const profile: AadhaarKycProfile = {
+        verified: true,
+        provider: 'imb',
+        requestId: verifyResult.requestId,
+        maskedAadhaar: verifyResult.details.maskedAadhaar,
+        last4: aadhaarCheck.last4,
+        fullName: verifyResult.details.fullName,
+        dateOfBirth: verifyResult.details.dateOfBirth,
+        gender: verifyResult.details.gender,
+        address: verifyResult.details.address,
+        photoBase64: verifyResult.details.photoBase64,
+        verifiedAt: new Date(nowMs).toISOString(),
+      };
+      kyc.verifiedByKey[playerKey] = profile;
+      delete kyc.challengesByKey[playerKey];
+      persistStore();
+      res.json({ ok: true, profile });
+      return;
+    }
+
+    if (challenge.otpCode !== otpCheck.value) {
+      challenge.attempts += 1;
+      const remaining = Math.max(0, AADHAAR_OTP_MAX_ATTEMPTS - challenge.attempts);
+      persistStore();
+      res.status(400).json({
+        error:
+          remaining > 0
+            ? `Incorrect Aadhaar OTP. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`
+            : 'Too many incorrect Aadhaar OTP attempts. Request a new OTP.',
+      });
+      return;
+    }
+
+    const profile: AadhaarKycProfile = {
+      verified: true,
+      provider: 'preview',
+      requestId: challenge.requestId,
+      maskedAadhaar: challenge.maskedAadhaar,
+      last4: aadhaarCheck.last4,
+      fullName: playerName,
+      verifiedAt: new Date(nowMs).toISOString(),
+    };
+    kyc.verifiedByKey[playerKey] = profile;
+    delete kyc.challengesByKey[playerKey];
+    persistStore();
+    res.json({ ok: true, profile });
+  });
+
+  app.get('/api/withdrawals/player', (req, res) => {
+    const admin = getAdminStore();
+    const { playerName } = resolveKycPlayerContext(req, req.query?.playerName);
+    const withdrawals = playerName
+      ? admin.withdrawals.filter(
+          (w) => w.playerName.trim().toLowerCase() === playerName.toLowerCase()
+        )
+      : [];
+    res.json({ withdrawals });
+  });
+
+  app.post('/api/withdrawals/request', (req, res) => {
+    const kyc = getKycStore();
+    const { playerKey, playerName } = resolveKycPlayerContext(req, req.body?.playerName);
+    const profile = kyc.verifiedByKey[playerKey] ?? null;
+    const kycGate = canWithdrawWithKyc(profile);
+    if (!kycGate.allowed) {
+      res.status(403).json({
+        error: kycGate.error,
+        kycRequired: true,
+      });
+      return;
+    }
+
+    const admin = getAdminStore();
+    const result = submitWithdrawalRequest(
+      admin,
+      {
+        playerName,
+        amount: Number(req.body?.amount ?? 0),
+        upiId: String(req.body?.upiId ?? ''),
+        maskedAadhaar: profile?.maskedAadhaar,
+      },
+      new Date().toISOString()
+    );
+    if (result.error || !result.withdrawal) {
+      res.status(400).json({ error: result.error || 'Unable to submit withdrawal request.' });
+      return;
+    }
+
+    store.adminState = result.admin;
+    persistStore();
+
+    const playerWithdrawals = result.admin.withdrawals.filter(
+      (w) =>
+        w.playerName.trim().toLowerCase() ===
+        result.withdrawal!.playerName.trim().toLowerCase()
+    );
+    res.status(201).json({
+      ok: true,
+      withdrawal: result.withdrawal,
+      withdrawals: playerWithdrawals,
+    });
+  });
+
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'API endpoint not found.' });
+  });
+
   const httpServer = http.createServer(app);
 
   if (process.env.NODE_ENV !== 'production') {
@@ -1378,13 +2052,58 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distDir));
+    const indexHtmlPath = path.join(distDir, 'index.html');
+    if (!fs.existsSync(indexHtmlPath)) {
+      console.warn(
+        `[production] Missing ${indexHtmlPath}. Run "npm run build" before starting the production server.`
+      );
+    }
+    app.use(
+      express.static(distDir, {
+        maxAge: '1y',
+        immutable: true,
+        setHeaders: (res, filePath) => {
+          const base = path.basename(filePath);
+          if (
+            base === 'index.html' ||
+            base === 'sw.js' ||
+            base === 'registerSW.js' ||
+            base === 'manifest.json'
+          ) {
+            res.setHeader('Cache-Control', 'no-cache');
+          }
+        },
+      })
+    );
     app.get('*', (_req, res) => {
-      res.sendFile(path.join(distDir, 'index.html'));
+      if (!fs.existsSync(indexHtmlPath)) {
+        res
+          .status(503)
+          .send('Application build missing. Please run npm run build first.');
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-cache');
+      res.sendFile(indexHtmlPath);
     });
   }
 
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (
+      err instanceof SyntaxError &&
+      typeof (err as { status?: number }).status === 'number' &&
+      (err as { status?: number }).status === 400
+    ) {
+      res.status(400).json({ error: 'Invalid JSON request body.' });
+      return;
+    }
+    console.error('Unhandled server error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error.' });
+    }
+  });
+
   const wss = new WebSocketServer({ noServer: true });
+  const wsAliveMap = new WeakMap<WebSocket, boolean>();
 
   httpServer.on('upgrade', (req, socket, head) => {
     try {
@@ -1393,6 +2112,8 @@ async function startServer() {
         wss.handleUpgrade(req, socket, head, (ws) => {
           wss.emit('connection', ws, req);
         });
+      } else if (process.env.NODE_ENV === 'production') {
+        socket.destroy();
       }
     } catch {
       socket.destroy();
@@ -1407,6 +2128,11 @@ async function startServer() {
       playerId: null,
     };
     clients.add(meta);
+    wsAliveMap.set(ws, true);
+
+    ws.on('pong', () => {
+      wsAliveMap.set(ws, true);
+    });
 
     ws.on('message', (raw) => {
       try {
@@ -1455,10 +2181,47 @@ async function startServer() {
     });
   });
 
+  const wsHeartbeatInterval = setInterval(() => {
+    for (const client of clients) {
+      if (wsAliveMap.get(client.ws) === false) {
+        client.ws.terminate();
+        continue;
+      }
+      wsAliveMap.set(client.ws, false);
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.ping();
+      }
+    }
+  }, 30_000);
+  wsHeartbeatInterval.unref();
+
   const expiryInterval = setInterval(() => {
     pruneExpiredOpenBattles();
   }, 10_000);
   expiryInterval.unref();
+
+  const shutdown = (signal: string) => {
+    console.log(`Received ${signal}, shutting down cleanly...`);
+    clearInterval(expiryInterval);
+    clearInterval(wsHeartbeatInterval);
+    persistStore();
+    for (const client of clients) {
+      try {
+        client.ws.close(1001, 'Server shutting down');
+      } catch {
+        // ignore close errors
+      }
+    }
+    wss.close(() => {
+      httpServer.close(() => {
+        process.exit(0);
+      });
+    });
+    setTimeout(() => process.exit(0), 5000).unref();
+  };
+
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Ludo league.online server running at http://localhost:${PORT}`);
