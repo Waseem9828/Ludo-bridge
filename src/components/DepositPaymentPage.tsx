@@ -15,6 +15,8 @@ import {
   submitPlayerDepositRequest,
   type DepositPaymentConfig,
 } from '../api/adminClient';
+import { createLiveDepositLink } from '../api/liveBackendClient';
+import { readStoredAuthSession } from '../api/authClient';
 import {
   buildUpiPaymentUri,
   DEFAULT_ADMIN_SETTINGS,
@@ -152,6 +154,9 @@ export function DepositPaymentPage({
     () => `LLD${Date.now().toString().slice(-8)}`
   );
 
+  const [liveGatewayUrl, setLiveGatewayUrl] = useState<string | null>(null);
+  const [gatewayLoading, setGatewayLoading] = useState<boolean>(false);
+
   useEffect(() => {
     let active = true;
     fetchDepositConfig()
@@ -161,46 +166,86 @@ export function DepositPaymentPage({
       .catch(() => {
         // fallback defaults already set
       });
+
+    const session = readStoredAuthSession();
+    if (session?.token) {
+      setGatewayLoading(true);
+      createLiveDepositLink(safeAmount, session.token)
+        .then((res) => {
+          if (active && res?.url) {
+            setLiveGatewayUrl(res.url);
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (active) setGatewayLoading(false);
+        });
+    }
+
+    const onPaymentSuccess = () => {
+      if (!active) return;
+      const rec: AdminDepositRecord = {
+        id: `DEP_${Date.now()}`,
+        playerName,
+        amount: safeAmount,
+        method: 'Live UPI Gateway',
+        reference: 'AUTO_CREDITED',
+        status: 'credited',
+        createdAt: new Date().toISOString(),
+        processedAt: new Date().toISOString(),
+      };
+      setSubmittedRecord(rec);
+      onSubmitted([rec]);
+    };
+
+    window.addEventListener('ludobridge.paymentSuccess', onPaymentSuccess);
+
     return () => {
       active = false;
+      window.removeEventListener('ludobridge.paymentSuccess', onPaymentSuccess);
     };
-  }, []);
+  }, [safeAmount, playerName, onSubmitted]);
 
   const safeAmount = Math.max(10, Math.round(Number(amount) || 0));
   const isAndroidDevice =
     typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
 
-  const genericUpiUri = useMemo(
-    () =>
-      buildUpiPaymentUri({
-        upiId: config.upiId,
-        merchantName: config.merchantName,
-        amount: safeAmount,
-        note: `Wallet Deposit ${safeAmount} INR`,
-        scheme: 'upi',
-      }),
-    [config.merchantName, config.upiId, safeAmount]
-  );
+  const activeQrUri = useMemo(() => {
+    if (liveGatewayUrl && (liveGatewayUrl.startsWith('upi://') || liveGatewayUrl.startsWith('https://'))) {
+      return liveGatewayUrl;
+    }
+    return buildUpiPaymentUri({
+      upiId: config.upiId,
+      merchantName: config.merchantName,
+      amount: safeAmount,
+      note: `Wallet Deposit ${safeAmount} INR`,
+      scheme: 'upi',
+    });
+  }, [config.merchantName, config.upiId, liveGatewayUrl, safeAmount]);
+
+  const genericUpiUri = activeQrUri;
 
   const appLinks = useMemo(
     () =>
       UPI_APPS.map((app) => ({
         ...app,
-        href: buildUpiPaymentUri({
-          upiId: config.upiId,
-          merchantName: config.merchantName,
-          amount: safeAmount,
-          note: `Wallet Deposit ${safeAmount} INR`,
-          scheme: app.scheme,
-          androidIntent: isAndroidDevice,
-        }),
+        href: (liveGatewayUrl && liveGatewayUrl.startsWith('upi://'))
+          ? liveGatewayUrl
+          : buildUpiPaymentUri({
+              upiId: config.upiId,
+              merchantName: config.merchantName,
+              amount: safeAmount,
+              note: `Wallet Deposit ${safeAmount} INR`,
+              scheme: app.scheme,
+              androidIntent: isAndroidDevice,
+            }),
       })),
-    [config.merchantName, config.upiId, isAndroidDevice, safeAmount]
+    [config.merchantName, config.upiId, isAndroidDevice, liveGatewayUrl, safeAmount]
   );
 
   useEffect(() => {
     let active = true;
-    QRCode.toDataURL(genericUpiUri, {
+    QRCode.toDataURL(activeQrUri, {
       width: 220,
       margin: 2,
       errorCorrectionLevel: 'M',
@@ -218,7 +263,7 @@ export function DepositPaymentPage({
     return () => {
       active = false;
     };
-  }, [genericUpiUri]);
+  }, [activeQrUri]);
 
   const handleCopyUpi = async () => {
     try {

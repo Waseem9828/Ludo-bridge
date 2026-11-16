@@ -540,8 +540,15 @@ export default function App() {
         writeWalletState(updated);
         return updated;
       });
+
+      const session = authSession || readStoredAuthSession();
+      if (session?.token) {
+        fetchLiveWallet(session.token).then((w) => {
+          if (w) setWallet((prev) => ({ ...prev, balance: w.wallet }));
+        }).catch(() => {});
+      }
     },
-    []
+    [authSession]
   );
 
   const deductEntryFeeOnce = useCallback(

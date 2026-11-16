@@ -304,6 +304,20 @@ export function getOrCreateLiveSocket(auth: { token: string; userId: string } | 
     }
   });
 
+  socketInstance.on('paymentStatus', (raw: any) => {
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (parsed?.status === 200 || raw?.status === 200) {
+        window.dispatchEvent(new CustomEvent('ludobridge.paymentSuccess', { detail: parsed }));
+        if (currentSocketAuth?.userId) {
+          socketInstance?.emit('getUserWallet', JSON.stringify({ payload: { userId: currentSocketAuth.userId } }));
+        }
+      }
+    } catch {
+      // ignore
+    }
+  });
+
   socketInstance.on('settings', (raw: any) => {
     try {
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -462,18 +476,23 @@ export async function fetchLiveWallet(token: string): Promise<{ wallet: number; 
 export async function createLiveDepositLink(
   amount: number,
   token: string,
-  method: string = 'upigateway'
-): Promise<{ link: string } | null> {
-  const res = await apiRequest<{ link: string }>('/transaction/buy-link', {
+  upiId?: string
+): Promise<{ url: string } | null> {
+  const payload: any = { amount: Number(amount) };
+  if (upiId?.trim()) payload.upiId = upiId.trim();
+
+  const res = await apiRequest<any>('/transaction/buy-link', {
     method: 'POST',
-    body: JSON.stringify({ amount, method }),
+    body: JSON.stringify(payload),
   }, token);
 
-  if (res.data?.link) return { link: res.data.link };
+  const raw = res.data;
+  const url = raw?.Url || raw?.data?.Url || raw?.link || raw?.payment_url;
+  if (url) return { url };
   return null;
 }
 
-// Live Withdrawal
+// Live Withdrawal via UPI
 export async function requestLiveWithdrawalUpi(
   amount: number,
   upiId: string,
@@ -481,22 +500,39 @@ export async function requestLiveWithdrawalUpi(
 ): Promise<{ ok: boolean; message: string }> {
   const res = await apiRequest('/transaction/upi-sell', {
     method: 'POST',
-    body: JSON.stringify({ amount, upiId }),
+    body: JSON.stringify({
+      accountNumber: upiId.trim(),
+      amount: Number(amount),
+      bankName: 'upi',
+    }),
   }, token);
 
   if (res.status === 200) {
-    return { ok: true, message: 'Withdrawal request submitted successfully' };
+    return { ok: true, message: 'Withdrawal will process in 10 minutes' };
   }
   return { ok: false, message: res.error || 'Failed to submit withdrawal' };
 }
 
+// Live Withdrawal via Bank Account
 export async function requestLiveWithdrawalBank(
-  payload: { amount: number; bankName: string; accountNumber: string; IFSCCode: string },
+  payload: {
+    amount: number;
+    bankName: string;
+    accountNumber: string;
+    accountHolderName?: string;
+    ifscCode: string;
+  },
   token: string
 ): Promise<{ ok: boolean; message: string }> {
   const res = await apiRequest('/transaction/bank-sell', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      accountHolderName: payload.accountHolderName || '',
+      accountNumber: payload.accountNumber,
+      ifscCode: payload.ifscCode,
+      amount: Number(payload.amount),
+      bankName: payload.bankName,
+    }),
   }, token);
 
   if (res.status === 200) {
