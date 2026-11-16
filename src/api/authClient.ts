@@ -71,7 +71,34 @@ export async function sendAuthOtp(input: {
   const norm = normalizeIndianMobile(input.mobile);
   const cleanMobile = norm.valid ? norm.mobile : input.mobile.replace(/\D/g, '').slice(-10);
 
-  // First try login to check if user exists
+  if (input.intent === 'signup') {
+    const signupRes = await apiRequest('/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({
+        fullName: (input.name && input.name.trim()) ? input.name.trim() : 'Player',
+        phone: cleanMobile,
+        referCode: (input.referralCode && input.referralCode.trim()) ? input.referralCode.trim() : '',
+      }),
+    });
+
+    if (signupRes.status === 200 || signupRes.status === 201) {
+      return {
+        ok: true,
+        mobile: cleanMobile,
+        formattedMobile: formatIndianMobile(cleanMobile),
+        intent: 'signup',
+        channel: 'sms',
+        deliveryProvider: 'imb',
+        deliveryStatus: 'sent',
+        expiresInSeconds: 300,
+        resendCooldownSeconds: 30,
+      };
+    }
+
+    throw new Error(signupRes.error || 'Failed to dispatch registration OTP');
+  }
+
+  // Login flow
   const loginRes = await apiRequest('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ phone: cleanMobile }),
@@ -91,32 +118,8 @@ export async function sendAuthOtp(input: {
     };
   }
 
-  // If user does not exist (404), trigger signup to register and send OTP
-  if (loginRes.status === 404 || input.intent === 'signup') {
-    const signupRes = await apiRequest('/auth/signup', {
-      method: 'POST',
-      body: JSON.stringify({
-        fullName: input.name || 'Ludo Player',
-        phone: cleanMobile,
-        referCode: input.referralCode || '',
-      }),
-    });
-
-    if (signupRes.status === 200 || signupRes.status === 201) {
-      return {
-        ok: true,
-        mobile: cleanMobile,
-        formattedMobile: formatIndianMobile(cleanMobile),
-        intent: 'signup',
-        channel: 'sms',
-        deliveryProvider: 'imb',
-        deliveryStatus: 'sent',
-        expiresInSeconds: 300,
-        resendCooldownSeconds: 30,
-      };
-    }
-
-    throw new Error(signupRes.error || 'Failed to dispatch registration OTP');
+  if (loginRes.status === 404) {
+    throw new Error('User not found. Please click Register to create your account.');
   }
 
   throw new Error(loginRes.error || 'Failed to dispatch login OTP');

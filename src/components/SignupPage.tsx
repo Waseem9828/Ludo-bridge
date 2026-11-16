@@ -1,17 +1,15 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
   Gift,
   KeyRound,
-  MessageCircle,
-  MessageSquare,
   Phone,
   RefreshCw,
   User,
 } from 'lucide-react';
-import { fetchOtpChannels, sendAuthOtp, verifyAuthOtp } from '../api/authClient';
+import { sendAuthOtp, verifyAuthOtp } from '../api/authClient';
 import {
   formatIndianMobile,
   normalizeIndianMobile,
@@ -19,7 +17,6 @@ import {
   validateSignupName,
   type AuthUserAccount,
 } from '../shared/auth';
-import type { OtpDeliveryChannel } from '../shared/imbCommunications';
 import type { AvatarId } from '../shared/matchmaking';
 
 interface SignupPageProps {
@@ -38,33 +35,13 @@ export function SignupPage({
   const [step, setStep] = useState<'details' | 'otp'>('details');
   const [nameInput, setNameInput] = useState('');
   const [mobileInput, setMobileInput] = useState('');
-  const [channel, setChannel] = useState<OtpDeliveryChannel>('sms');
-  const channelSelectedRef = useRef(false);
   const [referralInput, setReferralInput] = useState('');
   const [showReferral, setShowReferral] = useState(false);
   const [verifiedMobile, setVerifiedMobile] = useState('');
   const [otpInput, setOtpInput] = useState('');
-  const [otpPreview, setOtpPreview] = useState<string | null>(null);
-  const [deliveryInfo, setDeliveryInfo] = useState<{
-    channel: OtpDeliveryChannel;
-    deliveryProvider: 'imb' | 'preview';
-    messageId?: string;
-  } | null>(null);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    fetchOtpChannels().then((cfg) => {
-      if (active && !channelSelectedRef.current) {
-        setChannel(cfg.defaultChannel);
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (cooldownSeconds <= 0) return;
@@ -96,15 +73,10 @@ export function SignupPage({
       const res = await sendAuthOtp({
         mobile: mobileCheck.value,
         intent: 'signup',
-        channel,
+        name: nameCheck.value,
+        referralCode: referralInput.trim() || undefined,
       });
       setVerifiedMobile(res.mobile);
-      setOtpPreview(res.otpPreview ?? null);
-      setDeliveryInfo({
-        channel: res.channel || channel,
-        deliveryProvider: res.deliveryProvider,
-        messageId: res.messageId,
-      });
       setOtpInput('');
       setCooldownSeconds(res.resendCooldownSeconds || 30);
       setStep('otp');
@@ -152,9 +124,6 @@ export function SignupPage({
       setSubmitting(false);
     }
   };
-
-  const activeChannelLabel =
-    (deliveryInfo?.channel ?? channel) === 'whatsapp' ? 'WhatsApp' : 'SMS';
 
   return (
     <div
@@ -205,7 +174,7 @@ export function SignupPage({
           <p className="text-sm text-[#5A606D] leading-relaxed">
             {step === 'details'
               ? 'Enter your name and mobile number to get an OTP and create your account.'
-              : `Enter the 6-digit OTP sent via ${activeChannelLabel} to ${formatIndianMobile(verifiedMobile)}.`}
+              : `Enter the 6-digit OTP sent to ${formatIndianMobile(verifiedMobile)}.`}
           </p>
         </div>
 
@@ -267,52 +236,6 @@ export function SignupPage({
                   placeholder="9876543210"
                   className="w-full min-w-0 min-h-[48px] bg-transparent px-3.5 text-base font-semibold tracking-wide text-[#16181D] placeholder:text-[#8C8F96] tabular-nums focus:outline-none"
                 />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <span className="block text-xs font-bold text-[#16181D]">
-                Send OTP via
-              </span>
-              <div
-                role="group"
-                aria-label="OTP delivery channel"
-                className="grid grid-cols-2 gap-2"
-              >
-                <button
-                  type="button"
-                  aria-pressed={channel === 'sms'}
-                  data-testid="signup-channel-sms"
-                  onClick={() => {
-                    channelSelectedRef.current = true;
-                    setChannel('sms');
-                  }}
-                  className={`min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold transition-colors whitespace-nowrap ${
-                    channel === 'sms'
-                      ? 'border-[#0D7A5F] bg-[#ECFDF5] text-[#0D7A5F]'
-                      : 'border-[#16181D]/12 bg-[#F8F7F4] text-[#5A606D] hover:text-[#16181D]'
-                  }`}
-                >
-                  <MessageSquare className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span>SMS OTP</span>
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={channel === 'whatsapp'}
-                  data-testid="signup-channel-whatsapp"
-                  onClick={() => {
-                    channelSelectedRef.current = true;
-                    setChannel('whatsapp');
-                  }}
-                  className={`min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold transition-colors whitespace-nowrap ${
-                    channel === 'whatsapp'
-                      ? 'border-[#0D7A5F] bg-[#ECFDF5] text-[#0D7A5F]'
-                      : 'border-[#16181D]/12 bg-[#F8F7F4] text-[#5A606D] hover:text-[#16181D]'
-                  }`}
-                >
-                  <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span>WhatsApp OTP</span>
-                </button>
               </div>
             </div>
 
@@ -381,8 +304,6 @@ export function SignupPage({
                 onClick={() => {
                   setStep('details');
                   setOtpInput('');
-                  setOtpPreview(null);
-                  setDeliveryInfo(null);
                   setErrorMsg(null);
                 }}
                 data-testid="signup-edit-details-btn"
@@ -392,48 +313,20 @@ export function SignupPage({
               </button>
             </div>
 
-            {otpPreview ? (
-              <div
-                data-testid="otp-arrival-banner"
-                className="flex items-center justify-between gap-3 rounded-xl border border-[#0D7A5F]/20 bg-[#ECFDF5] px-3.5 py-2.5 text-xs text-[#064E3B]"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  {deliveryInfo?.channel === 'whatsapp' ? (
-                    <MessageCircle className="h-4 w-4 shrink-0 text-[#0D7A5F]" aria-hidden="true" />
-                  ) : (
-                    <MessageSquare className="h-4 w-4 shrink-0 text-[#0D7A5F]" aria-hidden="true" />
-                  )}
-                  <span className="font-medium">
-                    {activeChannelLabel} OTP:{' '}
-                    <strong className="font-mono text-sm font-bold tracking-wider tabular-nums">
-                      {otpPreview}
-                    </strong>
-                  </span>
-                </div>
-                <span className="text-[11px] font-semibold text-[#0D7A5F] whitespace-nowrap">
-                  Valid 5m
+            <div
+              data-testid="otp-sent-banner"
+              className="flex items-center justify-between gap-3 rounded-xl border border-[#0D7A5F]/20 bg-[#ECFDF5] px-3.5 py-2.5 text-xs text-[#064E3B]"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-[#0D7A5F]" aria-hidden="true" />
+                <span className="font-semibold">
+                  OTP sent to {formatIndianMobile(verifiedMobile)}
                 </span>
               </div>
-            ) : (
-              deliveryInfo?.deliveryProvider === 'imb' && (
-                <div
-                  data-testid="otp-sent-banner"
-                  className="flex items-center justify-between gap-3 rounded-xl border border-[#0D7A5F]/20 bg-[#ECFDF5] px-3.5 py-2.5 text-xs text-[#064E3B]"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <CheckCircle2 className="h-4 w-4 shrink-0 text-[#0D7A5F]" aria-hidden="true" />
-                    <span className="font-semibold">
-                      OTP sent via {activeChannelLabel}
-                    </span>
-                  </div>
-                  {deliveryInfo.messageId && (
-                    <span className="text-[11px] font-mono font-semibold text-[#0D7A5F] truncate max-w-[130px]">
-                      Ref: {deliveryInfo.messageId}
-                    </span>
-                  )}
-                </div>
-              )
-            )}
+              <span className="text-[11px] font-semibold text-[#0D7A5F] whitespace-nowrap">
+                Valid 5m
+              </span>
+            </div>
 
             <div className="space-y-1.5">
               <label

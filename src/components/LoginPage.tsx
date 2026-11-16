@@ -1,22 +1,19 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
   KeyRound,
-  MessageCircle,
-  MessageSquare,
   Phone,
   RefreshCw,
 } from 'lucide-react';
-import { fetchOtpChannels, sendAuthOtp, verifyAuthOtp } from '../api/authClient';
+import { sendAuthOtp, verifyAuthOtp } from '../api/authClient';
 import {
   formatIndianMobile,
   normalizeIndianMobile,
   validateOtpCode,
   type AuthUserAccount,
 } from '../shared/auth';
-import type { OtpDeliveryChannel } from '../shared/imbCommunications';
 
 interface LoginPageProps {
   onAuthSuccess: (payload: { user: AuthUserAccount; token: string }) => void;
@@ -31,31 +28,12 @@ export function LoginPage({
 }: LoginPageProps) {
   const [step, setStep] = useState<'mobile' | 'otp'>('mobile');
   const [mobileInput, setMobileInput] = useState('');
-  const [channel, setChannel] = useState<OtpDeliveryChannel>('sms');
-  const channelSelectedRef = useRef(false);
   const [verifiedMobile, setVerifiedMobile] = useState('');
   const [otpInput, setOtpInput] = useState('');
-  const [otpPreview, setOtpPreview] = useState<string | null>(null);
-  const [deliveryInfo, setDeliveryInfo] = useState<{
-    channel: OtpDeliveryChannel;
-    deliveryProvider: 'imb' | 'preview';
-    messageId?: string;
-  } | null>(null);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    fetchOtpChannels().then((cfg) => {
-      if (active && !channelSelectedRef.current) {
-        setChannel(cfg.defaultChannel);
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
+  const [showRegisterPrompt, setShowRegisterPrompt] = useState(false);
 
   useEffect(() => {
     if (cooldownSeconds <= 0) return;
@@ -68,6 +46,7 @@ export function LoginPage({
   const handleSendOtp = async (e?: FormEvent) => {
     if (e) e.preventDefault();
     setErrorMsg(null);
+    setShowRegisterPrompt(false);
 
     const check = normalizeIndianMobile(mobileInput);
     if (!check.valid) {
@@ -80,22 +59,17 @@ export function LoginPage({
       const res = await sendAuthOtp({
         mobile: check.value,
         intent: 'login',
-        channel,
       });
       setVerifiedMobile(res.mobile);
-      setOtpPreview(res.otpPreview ?? null);
-      setDeliveryInfo({
-        channel: res.channel || channel,
-        deliveryProvider: res.deliveryProvider,
-        messageId: res.messageId,
-      });
       setOtpInput('');
       setCooldownSeconds(res.resendCooldownSeconds || 30);
       setStep('otp');
-    } catch (err) {
-      setErrorMsg(
-        err instanceof Error ? err.message : 'Unable to send OTP right now.'
-      );
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : 'Unable to send OTP right now.';
+      setErrorMsg(msg);
+      if (msg.includes('not found') || msg.includes('Register')) {
+        setShowRegisterPrompt(true);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -180,7 +154,7 @@ export function LoginPage({
           <p className="text-sm text-[#5A606D] leading-relaxed">
             {step === 'mobile'
               ? 'Enter your mobile number to receive a 6-digit OTP.'
-              : `Enter the 6-digit OTP sent via ${activeChannelLabel} to ${formatIndianMobile(verifiedMobile)}.`}
+              : `Enter the 6-digit OTP sent to ${formatIndianMobile(verifiedMobile)}.`}
           </p>
         </div>
 
@@ -217,52 +191,6 @@ export function LoginPage({
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <span className="block text-xs font-bold text-[#16181D]">
-                Send OTP via
-              </span>
-              <div
-                role="group"
-                aria-label="OTP delivery channel"
-                className="grid grid-cols-2 gap-2"
-              >
-                <button
-                  type="button"
-                  aria-pressed={channel === 'sms'}
-                  data-testid="login-channel-sms"
-                  onClick={() => {
-                    channelSelectedRef.current = true;
-                    setChannel('sms');
-                  }}
-                  className={`min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold transition-colors whitespace-nowrap ${
-                    channel === 'sms'
-                      ? 'border-[#0D7A5F] bg-[#ECFDF5] text-[#0D7A5F]'
-                      : 'border-[#16181D]/12 bg-[#F8F7F4] text-[#5A606D] hover:text-[#16181D]'
-                  }`}
-                >
-                  <MessageSquare className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span>SMS OTP</span>
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={channel === 'whatsapp'}
-                  data-testid="login-channel-whatsapp"
-                  onClick={() => {
-                    channelSelectedRef.current = true;
-                    setChannel('whatsapp');
-                  }}
-                  className={`min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold transition-colors whitespace-nowrap ${
-                    channel === 'whatsapp'
-                      ? 'border-[#0D7A5F] bg-[#ECFDF5] text-[#0D7A5F]'
-                      : 'border-[#16181D]/12 bg-[#F8F7F4] text-[#5A606D] hover:text-[#16181D]'
-                  }`}
-                >
-                  <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span>WhatsApp OTP</span>
-                </button>
-              </div>
-            </div>
-
             {errorMsg && (
               <div
                 role="alert"
@@ -270,6 +198,17 @@ export function LoginPage({
                 className="rounded-xl bg-[#FEF2F2] border border-[#DC2626]/20 px-3.5 py-2.5 text-xs font-semibold text-[#991B1B]"
               >
                 {errorMsg}
+                {showRegisterPrompt && (
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={onNavigateSignup}
+                      className="font-bold underline text-[#0D7A5F] hover:text-[#064E3B]"
+                    >
+                      Click here to Register
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -294,8 +233,6 @@ export function LoginPage({
                 onClick={() => {
                   setStep('mobile');
                   setOtpInput('');
-                  setOtpPreview(null);
-                  setDeliveryInfo(null);
                   setErrorMsg(null);
                 }}
                 data-testid="login-change-mobile-btn"
@@ -305,48 +242,20 @@ export function LoginPage({
               </button>
             </div>
 
-            {otpPreview ? (
-              <div
-                data-testid="otp-arrival-banner"
-                className="flex items-center justify-between gap-3 rounded-xl border border-[#0D7A5F]/20 bg-[#ECFDF5] px-3.5 py-2.5 text-xs text-[#064E3B]"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  {deliveryInfo?.channel === 'whatsapp' ? (
-                    <MessageCircle className="h-4 w-4 shrink-0 text-[#0D7A5F]" aria-hidden="true" />
-                  ) : (
-                    <MessageSquare className="h-4 w-4 shrink-0 text-[#0D7A5F]" aria-hidden="true" />
-                  )}
-                  <span className="font-medium">
-                    {activeChannelLabel} OTP:{' '}
-                    <strong className="font-mono text-sm font-bold tracking-wider tabular-nums">
-                      {otpPreview}
-                    </strong>
-                  </span>
-                </div>
-                <span className="text-[11px] font-semibold text-[#0D7A5F] whitespace-nowrap">
-                  Valid 5m
+            <div
+              data-testid="otp-sent-banner"
+              className="flex items-center justify-between gap-3 rounded-xl border border-[#0D7A5F]/20 bg-[#ECFDF5] px-3.5 py-2.5 text-xs text-[#064E3B]"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-[#0D7A5F]" aria-hidden="true" />
+                <span className="font-semibold">
+                  OTP sent to {formatIndianMobile(verifiedMobile)}
                 </span>
               </div>
-            ) : (
-              deliveryInfo?.deliveryProvider === 'imb' && (
-                <div
-                  data-testid="otp-sent-banner"
-                  className="flex items-center justify-between gap-3 rounded-xl border border-[#0D7A5F]/20 bg-[#ECFDF5] px-3.5 py-2.5 text-xs text-[#064E3B]"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <CheckCircle2 className="h-4 w-4 shrink-0 text-[#0D7A5F]" aria-hidden="true" />
-                    <span className="font-semibold">
-                      OTP sent via {activeChannelLabel}
-                    </span>
-                  </div>
-                  {deliveryInfo.messageId && (
-                    <span className="text-[11px] font-mono font-semibold text-[#0D7A5F] truncate max-w-[130px]">
-                      Ref: {deliveryInfo.messageId}
-                    </span>
-                  )}
-                </div>
-              )
-            )}
+              <span className="text-[11px] font-semibold text-[#0D7A5F] whitespace-nowrap">
+                Valid 5m
+              </span>
+            </div>
 
             <div className="space-y-1.5">
               <label
