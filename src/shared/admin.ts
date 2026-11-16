@@ -21,6 +21,10 @@ export interface AdminPlayerRecord {
   totalPenalties: number;
   status: 'active' | 'suspended';
   joinedAt: string;
+  referralCode?: string;
+  referredBy?: string;
+  totalReferrals?: number;
+  referralEarnings?: number;
 }
 
 export interface AdminDepositRecord {
@@ -67,6 +71,7 @@ export interface AdminSystemSettings {
   commissionPct: number;
   withdrawalFeePct: number;
   referralBonusAmount: number;
+  referralCommissionPct?: number;
   defaultWrongClaimPenalty: number;
   minDeposit: number;
   maxDeposit: number;
@@ -130,6 +135,7 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSystemSettings = {
   commissionPct: 5,
   withdrawalFeePct: 0,
   referralBonusAmount: 50,
+  referralCommissionPct: 2,
   defaultWrongClaimPenalty: 100,
   minDeposit: 10,
   maxDeposit: 50000,
@@ -170,6 +176,9 @@ export function createInitialAdminStore(now = Date.now()): AdminStoreState {
       totalPenalties: 0,
       status: 'active',
       joinedAt: iso(86400000 * 14),
+      referralCode: 'RAHUL88',
+      totalReferrals: 12,
+      referralEarnings: 480,
     },
     {
       id: 'mock-aarav',
@@ -183,6 +192,9 @@ export function createInitialAdminStore(now = Date.now()): AdminStoreState {
       totalPenalties: 0,
       status: 'active',
       joinedAt: iso(86400000 * 21),
+      referralCode: 'AARAV99',
+      totalReferrals: 24,
+      referralEarnings: 1240,
     },
     {
       id: 'mock-kavya',
@@ -196,6 +208,10 @@ export function createInitialAdminStore(now = Date.now()): AdminStoreState {
       totalPenalties: 100,
       status: 'active',
       joinedAt: iso(86400000 * 10),
+      referralCode: 'KAVYA33',
+      referredBy: 'AARAV99',
+      totalReferrals: 5,
+      referralEarnings: 190,
     },
     {
       id: 'mock-zoya',
@@ -209,6 +225,10 @@ export function createInitialAdminStore(now = Date.now()): AdminStoreState {
       totalPenalties: 50,
       status: 'active',
       joinedAt: iso(86400000 * 7),
+      referralCode: 'ZOYA55',
+      referredBy: 'RAHUL88',
+      totalReferrals: 2,
+      referralEarnings: 60,
     },
     {
       id: 'mock-meera',
@@ -222,6 +242,10 @@ export function createInitialAdminStore(now = Date.now()): AdminStoreState {
       totalPenalties: 0,
       status: 'active',
       joinedAt: iso(86400000 * 9),
+      referralCode: 'MEERA44',
+      referredBy: 'AARAV99',
+      totalReferrals: 8,
+      referralEarnings: 320,
     },
     {
       id: 'mock-vikram',
@@ -235,6 +259,9 @@ export function createInitialAdminStore(now = Date.now()): AdminStoreState {
       totalPenalties: 150,
       status: 'suspended',
       joinedAt: iso(86400000 * 5),
+      referralCode: 'VIKRAM11',
+      totalReferrals: 0,
+      referralEarnings: 0,
     },
   ];
 
@@ -390,12 +417,95 @@ export function createInitialAdminStore(now = Date.now()): AdminStoreState {
   };
 }
 
+export function syncRealUserIntoAdminPlayers(players: AdminPlayerRecord[]): AdminPlayerRecord[] {
+  if (typeof window === 'undefined') return players;
+  try {
+    const liveProfileRaw = window.localStorage.getItem('ludobridge.liveUserProfile');
+    let realName = '';
+    let realPhone = '';
+    let realReferCode = '';
+    let realTotalRefer = 0;
+    let realReferelBalance = 0;
+    let realReferredBy = '';
+    let realWallet = 0;
+
+    if (liveProfileRaw) {
+      const p = JSON.parse(liveProfileRaw);
+      realName = p.fullName || '';
+      realPhone = p.phone || '';
+      realReferCode = p.referCode || '';
+      realTotalRefer = Number(p.totalRefer || 0);
+      realReferelBalance = Number(p.referelBalance || 0);
+      realReferredBy = p.referredBy || '';
+      realWallet = Number(p.wallet || 0);
+    } else {
+      const sessionRaw = window.localStorage.getItem('ludobridge.auth.session.v1');
+      if (sessionRaw) {
+        const s = JSON.parse(sessionRaw);
+        realName = s?.user?.name || '';
+        realPhone = s?.user?.mobile || '';
+        realReferCode = s?.user?.referralCode || '';
+      }
+    }
+
+    if (realPhone || realName) {
+      const list = [...players];
+      const idx = list.findIndex(
+        (p) =>
+          (realPhone && (p.phoneOrTag === realPhone || p.phoneOrTag?.includes(realPhone))) ||
+          (realName && p.name.toLowerCase() === realName.toLowerCase())
+      );
+      if (idx >= 0) {
+        list[idx] = {
+          ...list[idx],
+          name: realName || list[idx].name,
+          phoneOrTag: realPhone || list[idx].phoneOrTag,
+          referralCode: realReferCode || list[idx].referralCode,
+          totalReferrals: realTotalRefer || list[idx].totalReferrals || 0,
+          referralEarnings: realReferelBalance || list[idx].referralEarnings || 0,
+          referredBy: realReferredBy || list[idx].referredBy,
+          walletBalance: realWallet > 0 ? realWallet : list[idx].walletBalance,
+        };
+        return list;
+      } else {
+        list.unshift({
+          id: 'live-user-primary',
+          name: realName || 'Live Player',
+          phoneOrTag: realPhone || 'Player',
+          walletBalance: realWallet || 100,
+          xp: 450,
+          level: 2,
+          matchesPlayed: 6,
+          wins: 4,
+          totalPenalties: 0,
+          status: 'active',
+          joinedAt: new Date().toISOString(),
+          referralCode: realReferCode || (realName ? `${realName.slice(0, 4).toUpperCase()}777` : 'USER100'),
+          totalReferrals: realTotalRefer,
+          referralEarnings: realReferelBalance,
+          referredBy: realReferredBy,
+        });
+        return list;
+      }
+    }
+  } catch {
+    // ignore storage parsing errors
+  }
+  return players;
+}
+
 export function ensureAdminStore(raw?: Partial<AdminStoreState> | null): AdminStoreState {
   const base = createInitialAdminStore();
-  if (!raw || typeof raw !== 'object') return base;
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ...base,
+      players: syncRealUserIntoAdminPlayers(base.players),
+    };
+  }
+  const resolvedPlayers = Array.isArray(raw.players) && raw.players.length > 0 ? raw.players : base.players;
   return {
     levels: Array.isArray(raw.levels) && raw.levels.length > 0 ? raw.levels : base.levels,
-    players: Array.isArray(raw.players) && raw.players.length > 0 ? raw.players : base.players,
+    players: syncRealUserIntoAdminPlayers(resolvedPlayers),
     deposits: Array.isArray(raw.deposits) ? raw.deposits : base.deposits,
     withdrawals: Array.isArray(raw.withdrawals) ? raw.withdrawals : base.withdrawals,
     penalties: Array.isArray(raw.penalties) ? raw.penalties : base.penalties,

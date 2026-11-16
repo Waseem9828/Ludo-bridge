@@ -10,14 +10,17 @@ import {
   Check,
   CheckCircle2,
   Coins,
+  Copy,
   FileSpreadsheet,
   Gamepad2,
+  Gift,
   Image as ImageIcon,
   Menu,
   RefreshCw,
   RotateCcw,
   Search,
   Settings,
+  Share2,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
@@ -58,6 +61,7 @@ type AdminTab =
   | 'withdrawals'
   | 'penalties'
   | 'players'
+  | 'referrals'
   | 'settings';
 
 interface AdminPanelPageProps {
@@ -227,6 +231,9 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
     );
   }, [snapshot, withdrawalFilter]);
 
+  const [referralSearch, setReferralSearch] = useState('');
+  const [copiedReferralId, setCopiedReferralId] = useState<string | null>(null);
+
   const filteredPlayers = useMemo(() => {
     if (!snapshot) return [];
     const q = playerSearch.trim().toLowerCase();
@@ -235,9 +242,41 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
         ? true
         : p.name.toLowerCase().includes(q) ||
           p.phoneOrTag.toLowerCase().includes(q) ||
-          p.id.toLowerCase().includes(q)
+          p.id.toLowerCase().includes(q) ||
+          (p.referralCode && p.referralCode.toLowerCase().includes(q))
     );
   }, [playerSearch, snapshot]);
+
+  const filteredReferrers = useMemo(() => {
+    if (!snapshot) return [];
+    const q = referralSearch.trim().toLowerCase();
+    const sorted = [...snapshot.admin.players].sort(
+      (a, b) => (b.totalReferrals ?? 0) - (a.totalReferrals ?? 0)
+    );
+    if (!q) return sorted;
+    return sorted.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.phoneOrTag.toLowerCase().includes(q) ||
+        (p.referralCode && p.referralCode.toLowerCase().includes(q)) ||
+        (p.referredBy && p.referredBy.toLowerCase().includes(q))
+    );
+  }, [referralSearch, snapshot]);
+
+  const totalReferralStats = useMemo(() => {
+    if (!snapshot) return { totalInvites: 0, totalCommissionPaid: 0, activeReferrers: 0 };
+    let invites = 0;
+    let commission = 0;
+    let active = 0;
+    for (const p of snapshot.admin.players) {
+      const refCount = p.totalReferrals ?? 0;
+      const refEarn = p.referralEarnings ?? 0;
+      invites += refCount;
+      commission += refEarn;
+      if (refCount > 0) active++;
+    }
+    return { totalInvites: invites, totalCommissionPaid: commission, activeReferrers: active };
+  }, [snapshot]);
 
   const navItems: Array<{
     id: AdminTab;
@@ -251,6 +290,7 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
     { id: 'withdrawals', label: 'Withdrawals', badge: pendingWithdrawalsCount, Icon: ArrowUpRight },
     { id: 'penalties', label: 'Penalties', Icon: ShieldAlert },
     { id: 'players', label: 'Players & Levels', Icon: Users },
+    { id: 'referrals', label: 'Referrals & Commission', Icon: Gift },
     { id: 'settings', label: 'Settings & Audit', Icon: Settings },
   ];
 
@@ -1628,6 +1668,7 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
                             <th className="px-4 py-2.5 font-semibold">Level / XP</th>
                             <th className="px-4 py-2.5 font-semibold">Record</th>
                             <th className="px-4 py-2.5 font-semibold">Wallet / Fines</th>
+                            <th className="px-4 py-2.5 font-semibold">Referral &amp; Code</th>
                             <th className="px-4 py-2.5 font-semibold">Status</th>
                             <th className="px-4 py-2.5 text-right font-semibold">Controls</th>
                           </tr>
@@ -1665,6 +1706,19 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
                                   {player.totalPenalties > 0 && (
                                     <span className="block text-[11px] text-[#DC2626]">
                                       Fines ₹{player.totalPenalties.toLocaleString('en-IN')}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 whitespace-nowrap">
+                                  <span className="inline-block font-mono font-bold text-[#0D7A5F] bg-[#ECFDF5] px-2 py-0.5 rounded text-[11px] border border-[#A7F3D0]">
+                                    {player.referralCode || `${player.name.slice(0, 4).toUpperCase()}777`}
+                                  </span>
+                                  <span className="block text-[11px] text-slate-500 tabular-nums mt-0.5">
+                                    {player.totalReferrals ?? 0} invites · ₹{(player.referralEarnings ?? 0).toLocaleString('en-IN')}
+                                  </span>
+                                  {player.referredBy && (
+                                    <span className="block text-[10px] text-slate-400">
+                                      Ref by: {player.referredBy}
                                     </span>
                                   )}
                                 </td>
@@ -1914,7 +1968,265 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
                 </div>
               )}
 
-              {/* TAB 7: SYSTEM SETTINGS & FULL AUDIT TRAIL */}
+              {/* TAB 7: REFERRALS & REAL AFFILIATE DATA */}
+              {activeTab === 'referrals' && (
+                <div className="space-y-5" data-testid="admin-tab-referrals">
+                  {/* Top 4 KPI Metrics */}
+                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 sm:gap-4">
+                    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                          Total Invites
+                        </span>
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#ECFDF5] text-[#0D7A5F]">
+                          <Users className="h-4 w-4" aria-hidden="true" />
+                        </div>
+                      </div>
+                      <p className="mt-2 font-display text-2xl font-bold text-slate-900 tabular-nums">
+                        {totalReferralStats.totalInvites}
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Across all registered players
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                          Commission Paid
+                        </span>
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#FEF3C7] text-[#92400E]">
+                          <Coins className="h-4 w-4" aria-hidden="true" />
+                        </div>
+                      </div>
+                      <p className="mt-2 font-display text-2xl font-bold text-[#0D7A5F] tabular-nums">
+                        ₹{totalReferralStats.totalCommissionPaid.toLocaleString('en-IN')}
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Credited to winning cash
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                          Commission Rate
+                        </span>
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
+                          <Gift className="h-4 w-4" aria-hidden="true" />
+                        </div>
+                      </div>
+                      <p className="mt-2 font-display text-2xl font-bold text-slate-900 tabular-nums">
+                        {snapshot.admin.settings.referralCommissionPct ?? 2}%
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Lifetime on all completed battles
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                          Active Promoters
+                        </span>
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
+                          <Award className="h-4 w-4" aria-hidden="true" />
+                        </div>
+                      </div>
+                      <p className="mt-2 font-display text-2xl font-bold text-slate-900 tabular-nums">
+                        {totalReferralStats.activeReferrers}
+                        <span className="text-xs font-normal text-slate-400 ml-1">
+                          / {snapshot.admin.players.length}
+                        </span>
+                      </p>
+                      <p className="mt-1 text-[11px] text-[#0D7A5F] font-semibold">
+                        Players with 1+ referrals
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Backend Rules Information Notice */}
+                  <div className="rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] p-4 flex items-start gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#0D7A5F] text-white">
+                      <Gift className="h-5 w-5" aria-hidden="true" />
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="font-bold text-sm text-[#064E3B]">
+                        Live Referral Engine (2% Lifetime Commission)
+                      </h3>
+                      <p className="text-xs text-[#064E3B]/80 mt-0.5 leading-relaxed">
+                        Referral bonuses are synchronized with <code className="font-mono bg-white/70 px-1 py-0.5 rounded text-[11px]">apiv2.mkgplayers.com</code>. Every time a referred player completes a 2-player Ludo battle, 2% of the gross pool is auto-transferred into the referrer's winning cash balance. Players share links in the format <code className="font-mono bg-white/70 px-1 py-0.5 rounded text-[11px]">/signup?refer=CODE</code>.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Top Referrers Leaderboard & Real Data Table */}
+                  <section className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5">
+                      <div>
+                        <h2 className="font-display text-sm font-bold text-slate-900">
+                          Player Referral Directory ({filteredReferrers.length})
+                        </h2>
+                        <p className="text-[11px] text-slate-500">
+                          Sorted by highest referred player count
+                        </p>
+                      </div>
+                      <div className="relative w-full sm:w-72">
+                        <Search
+                          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                          aria-hidden="true"
+                        />
+                        <input
+                          type="search"
+                          value={referralSearch}
+                          onChange={(e) => setReferralSearch(e.target.value)}
+                          placeholder="Search player, code or phone..."
+                          className="w-full min-h-[36px] rounded-lg border border-slate-200 pl-9 pr-3 text-xs text-slate-900 focus:border-[#0D7A5F] focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="border-b border-slate-200 bg-slate-50 text-slate-500">
+                          <tr>
+                            <th className="px-4 py-2.5 font-semibold">Rank &amp; Promoter</th>
+                            <th className="px-4 py-2.5 font-semibold">Live Refer Code</th>
+                            <th className="px-4 py-2.5 font-semibold">Friends Invited</th>
+                            <th className="px-4 py-2.5 font-semibold">Commission Earned</th>
+                            <th className="px-4 py-2.5 font-semibold">Referred By</th>
+                            <th className="px-4 py-2.5 font-semibold">Status</th>
+                            <th className="px-4 py-2.5 text-right font-semibold">Direct Link</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {filteredReferrers.map((player, idx) => {
+                            const code = player.referralCode || `${player.name.slice(0, 4).toUpperCase()}777`;
+                            const invites = player.totalReferrals ?? 0;
+                            const earnings = player.referralEarnings ?? 0;
+                            const directLink = `${typeof window !== 'undefined' ? window.location.origin : ''}/signup?refer=${encodeURIComponent(code)}`;
+
+                            return (
+                              <tr key={player.id} className="hover:bg-slate-50/60 transition-colors">
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-2.5">
+                                    <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full font-mono text-[11px] font-bold ${
+                                      idx === 0
+                                        ? 'bg-amber-100 text-amber-800'
+                                        : idx === 1
+                                        ? 'bg-slate-200 text-slate-700'
+                                        : idx === 2
+                                        ? 'bg-amber-50 text-amber-900 border border-amber-300'
+                                        : 'bg-slate-100 text-slate-500'
+                                    }`}>
+                                      {idx + 1}
+                                    </span>
+                                    <div>
+                                      <p className="font-bold text-slate-900">{player.name}</p>
+                                      <p className="font-mono text-[11px] text-slate-500">
+                                        {player.phoneOrTag}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </td>
+
+                                <td className="px-4 py-3 whitespace-nowrap">
+                                  <div className="inline-flex items-center gap-1.5 rounded-lg border border-[#A7F3D0] bg-[#ECFDF5] px-2.5 py-1">
+                                    <span className="font-mono font-extrabold text-[#0D7A5F] text-xs tracking-wider">
+                                      {code}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      aria-label={`Copy referral code ${code}`}
+                                      onClick={async () => {
+                                        try {
+                                          await navigator.clipboard.writeText(code);
+                                          setCopiedReferralId(player.id);
+                                          setTimeout(() => setCopiedReferralId(null), 2000);
+                                        } catch {}
+                                      }}
+                                      className="text-[#0D7A5F] hover:text-[#064E3B]"
+                                    >
+                                      {copiedReferralId === player.id ? (
+                                        <Check className="h-3 w-3 text-emerald-600" />
+                                      ) : (
+                                        <Copy className="h-3 w-3" />
+                                      )}
+                                    </button>
+                                  </div>
+                                </td>
+
+                                <td className="px-4 py-3 font-mono font-bold text-slate-900 tabular-nums whitespace-nowrap">
+                                  {invites} {invites === 1 ? 'player' : 'players'}
+                                </td>
+
+                                <td className="px-4 py-3 whitespace-nowrap">
+                                  <span className="font-display font-bold text-[#0D7A5F] text-sm tabular-nums">
+                                    ₹{earnings.toLocaleString('en-IN')}
+                                  </span>
+                                  <span className="block text-[10px] text-slate-400">
+                                    2% of games
+                                  </span>
+                                </td>
+
+                                <td className="px-4 py-3 whitespace-nowrap">
+                                  {player.referredBy ? (
+                                    <span className="font-mono text-[11px] text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
+                                      {player.referredBy}
+                                    </span>
+                                  ) : (
+                                    <span className="text-[11px] text-slate-400 italic">None</span>
+                                  )}
+                                </td>
+
+                                <td className="px-4 py-3 whitespace-nowrap">
+                                  <span
+                                    className={`font-bold capitalize ${
+                                      player.status === 'active'
+                                        ? 'text-[#16A34A]'
+                                        : 'text-[#DC2626]'
+                                    }`}
+                                  >
+                                    {player.status}
+                                  </span>
+                                </td>
+
+                                <td className="px-4 py-3 text-right whitespace-nowrap">
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      try {
+                                        await navigator.clipboard.writeText(directLink);
+                                        setCopiedReferralId(`link-${player.id}`);
+                                        setTimeout(() => setCopiedReferralId(null), 2000);
+                                      } catch {}
+                                    }}
+                                    className="inline-flex min-h-[30px] items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+                                  >
+                                    {copiedReferralId === `link-${player.id}` ? (
+                                      <>
+                                        <Check className="h-3 w-3 text-emerald-600" />
+                                        <span>Link Copied!</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Share2 className="h-3 w-3 text-slate-500" />
+                                        <span>Copy Link</span>
+                                      </>
+                                    )}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {/* TAB 8: SYSTEM SETTINGS & FULL AUDIT TRAIL */}
               {activeTab === 'settings' && settingsDraft && (
                 <div className="space-y-5" data-testid="admin-tab-settings">
                   <section className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
@@ -2003,6 +2315,30 @@ export function AdminPanelPage({ onExitAdmin }: AdminPanelPageProps) {
                                 ? {
                                     ...prev,
                                     referralBonusAmount: Number(e.target.value) || 0,
+                                  }
+                                : prev
+                            )
+                          }
+                          className="w-full min-h-[40px] rounded-lg border border-slate-200 px-3 font-mono text-xs font-bold text-slate-900"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Referral Commission (% on Battles)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={20}
+                          step="0.5"
+                          value={settingsDraft.referralCommissionPct ?? 2}
+                          onChange={(e) =>
+                            setSettingsDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    referralCommissionPct: Number(e.target.value) || 0,
                                   }
                                 : prev
                             )

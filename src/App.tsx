@@ -1406,7 +1406,12 @@ export default function App() {
             onOpenProfile={() => navigateToRoute('profile')}
           />
         ) : view === 'referral' ? (
-          <ReferralPage playerName={playerName} />
+          <ReferralPage
+            playerName={playerName}
+            authToken={authSession?.token ?? null}
+            authUser={authSession?.user ?? null}
+            onNavigateLogin={() => navigateToRoute('login')}
+          />
         ) : view === 'terms' ? (
           <TermsPage />
         ) : view === 'gst-policy' ? (

@@ -1,10 +1,12 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   Check,
   CheckCircle2,
   Copy,
   Gift,
   Link2,
+  Lock,
+  RefreshCw,
   Share2,
   Ticket,
   Users,
@@ -12,15 +14,24 @@ import {
 } from 'lucide-react';
 import {
   buildPlayerReferralCode,
-  computeReferralSummary,
-  getMockReferralHistory,
   validateReferralCodeInput,
 } from '../shared/matchmaking';
+import type { AuthUserAccount } from '../shared/auth';
+import {
+  applyReferralCode,
+  fetchLiveReferralHistory,
+  fetchLiveWallet,
+  fetchUserProfileData,
+  type UserProfileData,
+} from '../api/liveBackendClient';
 import { PageTitleHeading } from './PageTitleHeading';
 import { PlayerAvatar } from './PlayerAvatar';
 
 interface ReferralPageProps {
   playerName: string;
+  authToken?: string | null;
+  authUser?: AuthUserAccount | null;
+  onNavigateLogin?: () => void;
 }
 
 const APPLIED_REFERRAL_KEY = 'ludobridge.appliedReferralCode';
@@ -34,30 +45,87 @@ function readAppliedReferral(): string | null {
   }
 }
 
-export function ReferralPage({ playerName }: ReferralPageProps) {
+function writeAppliedReferral(code: string | null): void {
+  try {
+    if (code) {
+      window.localStorage.setItem(APPLIED_REFERRAL_KEY, code.trim());
+    } else {
+      window.localStorage.removeItem(APPLIED_REFERRAL_KEY);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function ReferralPage({
+  playerName,
+  authToken,
+  authUser,
+  onNavigateLogin,
+}: ReferralPageProps) {
+  const [profileData, setProfileData] = useState<UserProfileData | null>(null);
+  const [liveReferralBalance, setLiveReferralBalance] = useState<number>(0);
+  const [liveHistory, setLiveHistory] = useState<any[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
   const [copiedType, setCopiedType] = useState<'code' | 'link' | null>(null);
   const [friendCodeInput, setFriendCodeInput] = useState('');
   const [appliedCode, setAppliedCode] = useState<string | null>(() => readAppliedReferral());
+  const [applySuccess, setApplySuccess] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const [submittingCode, setSubmittingCode] = useState(false);
 
-  const referralCode = buildPlayerReferralCode(playerName);
+  useEffect(() => {
+    if (!authToken) return;
+    let active = true;
+    setLoading(true);
+
+    Promise.all([
+      fetchUserProfileData(authToken),
+      fetchLiveWallet(authToken),
+      fetchLiveReferralHistory(authToken),
+    ])
+      .then(([profile, wallet, history]) => {
+        if (!active) return;
+        if (profile) {
+          setProfileData(profile);
+          if (profile.referredBy) {
+            setAppliedCode(profile.referredBy);
+            writeAppliedReferral(profile.referredBy);
+          }
+        }
+        if (wallet) {
+          setLiveReferralBalance(wallet.winningCash || 0);
+        }
+        if (Array.isArray(history)) {
+          setLiveHistory(history);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [authToken]);
+
+  const referralCode =
+    profileData?.referCode ||
+    authUser?.referralCode ||
+    buildPlayerReferralCode(playerName);
+
+  const totalReferred = profileData?.totalRefer ?? 0;
+  const referralEarnings = profileData?.referelBalance ?? liveReferralBalance ?? 0;
+
   const referralUrl =
     typeof window !== 'undefined'
-      ? `${window.location.origin}/?ref=${encodeURIComponent(referralCode)}`
-      : `/?ref=${referralCode}`;
+      ? `${window.location.origin}/signup?refer=${encodeURIComponent(referralCode)}`
+      : `/signup?refer=${referralCode}`;
 
-  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(
-    `Play 2-player Ludo Classic with me on Ludo league.online! Use referral code ${referralCode}: ${referralUrl}`
-  )}`;
+  const shareText = `Play Ludo and earn daily on Ludo league.online!\nCommission Charge: 5% Only\nReferral: 2% on All Games\n24x7 Live Chat Support\nInstant Withdrawal via UPI/Bank\nRegister now with my refer code: ${referralCode}\n${referralUrl}`;
 
-  const referralHistory = useMemo(
-    () => getMockReferralHistory(playerName),
-    [playerName]
-  );
-  const referralStats = useMemo(
-    () => computeReferralSummary(referralHistory),
-    [referralHistory]
-  );
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(shareText)}`;
 
   const copyText = async (value: string, type: 'code' | 'link') => {
     let copied = false;
@@ -102,20 +170,39 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
     await copyText(referralUrl, 'link');
   };
 
-  const handleApplyFriendCode = (e: FormEvent) => {
+  const handleApplyFriendCode = async (e: FormEvent) => {
     e.preventDefault();
     setApplyError(null);
+    setApplySuccess(null);
+
     const check = validateReferralCodeInput(friendCodeInput, referralCode);
     if (!check.valid) {
       setApplyError(check.error || 'Invalid referral code.');
       return;
     }
-    setAppliedCode(check.value);
-    setFriendCodeInput('');
-    try {
-      window.localStorage.setItem(APPLIED_REFERRAL_KEY, check.value);
-    } catch {
-      // ignore storage errors
+
+    if (authToken) {
+      setSubmittingCode(true);
+      try {
+        const res = await applyReferralCode(check.value, authToken);
+        if (res.ok) {
+          setAppliedCode(check.value);
+          setApplySuccess(res.message || 'Referral code linked successfully!');
+          writeAppliedReferral(check.value);
+          setFriendCodeInput('');
+        } else {
+          setApplyError(res.message || 'Failed to apply referral code.');
+        }
+      } catch (err: any) {
+        setApplyError(err?.message || 'Unable to apply code right now.');
+      } finally {
+        setSubmittingCode(false);
+      }
+    } else {
+      setAppliedCode(check.value);
+      writeAppliedReferral(check.value);
+      setFriendCodeInput('');
+      setApplySuccess('Referral code saved!');
     }
   };
 
@@ -124,7 +211,33 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
       className="w-full px-4 py-5 sm:px-8 sm:py-8 space-y-5 sm:space-y-6"
       data-testid="referral-page"
     >
-      <PageTitleHeading title="Refer & Earn" />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <PageTitleHeading title="Refer & Earn" />
+        {authToken && (
+          <button
+            type="button"
+            onClick={() => {
+              if (authToken) {
+                setLoading(true);
+                Promise.all([
+                  fetchUserProfileData(authToken),
+                  fetchLiveWallet(authToken),
+                ])
+                  .then(([p, w]) => {
+                    if (p) setProfileData(p);
+                    if (w) setLiveReferralBalance(w.winningCash || 0);
+                  })
+                  .finally(() => setLoading(false));
+              }
+            }}
+            disabled={loading}
+            className="inline-flex min-h-[34px] items-center gap-1.5 rounded-full border border-[#16181D]/15 bg-white px-3 py-1 text-xs font-semibold text-[#5A606D] hover:bg-[#F8F7F4] hover:text-[#16181D] transition-colors"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
+            <span>Refresh Real Data</span>
+          </button>
+        )}
+      </div>
 
       {/* Top Desktop 12-Col Grid: Emerald Reward Ticket + Compact Stats & Apply Code */}
       <div className="grid gap-5 lg:grid-cols-12 items-stretch">
@@ -140,15 +253,15 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-medium text-[#A7F3D0]">
-                  Instant Referral Bonus
+                  Real Player Referral Program
                 </p>
                 <h2 className="mt-0.5 font-display text-xl sm:text-2xl font-bold tracking-tight text-white">
-                  Earn ₹50 Per Friend
+                  Earn 2% Lifetime Commission
                 </h2>
               </div>
             </div>
             <span className="hidden sm:inline-block text-xs font-semibold text-[#FCD34D] whitespace-nowrap shrink-0 tabular-nums">
-              Up to ₹500
+              On Every Battle
             </span>
           </div>
 
@@ -156,76 +269,87 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
           <div className="rounded-xl border border-dashed border-[#FCD34D]/45 bg-black/25 p-4 flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <span className="block text-[11px] font-medium text-white/70">
-                Your Invite Code
+                Your Live Refer Code
               </span>
               <span
-                data-testid="referral-code-value"
-                className="mt-0.5 block font-mono text-2xl sm:text-3xl font-bold tracking-[0.12em] text-[#FCD34D] tabular-nums"
+                data-testid="referral-code-display"
+                className="font-mono text-2xl sm:text-3xl font-extrabold tracking-wider text-[#FCD34D]"
               >
                 {referralCode}
               </span>
             </div>
+
             <button
               type="button"
-              data-testid="copy-referral-code-btn"
               onClick={() => copyText(referralCode, 'code')}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-full bg-white px-5 py-2 text-xs font-bold text-[#064E3B] shadow-pill-btn transition-colors hover:bg-[#FAF9F5] whitespace-nowrap shrink-0"
+              data-testid="copy-referral-code-btn"
+              className="min-h-[44px] inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-xs font-bold text-[#064E3B] shadow-pill-btn transition-colors hover:bg-[#FAF9F5] whitespace-nowrap"
             >
               {copiedType === 'code' ? (
-                <Check className="h-4 w-4" aria-hidden="true" />
+                <>
+                  <Check className="h-4 w-4 text-[#0D7A5F]" aria-hidden="true" />
+                  <span>Code Copied!</span>
+                </>
               ) : (
-                <Copy className="h-4 w-4" aria-hidden="true" />
+                <>
+                  <Copy className="h-4 w-4" aria-hidden="true" />
+                  <span>Copy Code</span>
+                </>
               )}
-              <span>{copiedType === 'code' ? 'Code Copied' : 'Copy Code'}</span>
             </button>
           </div>
 
-          {/* Share Action Bar */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {/* Action Row: WhatsApp & Native Share Buttons */}
+          <div className="flex flex-wrap items-center gap-2.5 pt-1">
             <a
               href={whatsappUrl}
               target="_blank"
               rel="noopener noreferrer"
-              data-testid="whatsapp-share-btn"
-              className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-full bg-[#FCD34D] px-5 py-2.5 text-xs font-bold text-[#16181D] shadow-pill-btn transition-colors hover:bg-[#FBBF24] whitespace-nowrap"
+              data-testid="referral-whatsapp-btn"
+              className="min-h-[44px] inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-[#25D366] px-4 py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#1EBE5D] transition-colors whitespace-nowrap"
             >
               <Share2 className="h-4 w-4" aria-hidden="true" />
-              <span>Share on WhatsApp</span>
+              <span>Share via WhatsApp</span>
             </a>
 
             <button
               type="button"
-              data-testid="copy-referral-link-btn"
               onClick={handleNativeShare}
-              className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-full border border-white/20 bg-white/10 px-5 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-white/20 whitespace-nowrap"
+              data-testid="referral-share-link-btn"
+              className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-full bg-white/20 px-4 py-2.5 text-xs font-bold text-white hover:bg-white/30 transition-colors whitespace-nowrap"
             >
               {copiedType === 'link' ? (
-                <Check className="h-4 w-4 text-[#A7F3D0]" aria-hidden="true" />
+                <>
+                  <Check className="h-4 w-4 text-[#A7F3D0]" aria-hidden="true" />
+                  <span>Link Copied!</span>
+                </>
               ) : (
-                <Link2 className="h-4 w-4" aria-hidden="true" />
+                <>
+                  <Link2 className="h-4 w-4" aria-hidden="true" />
+                  <span>Copy Link</span>
+                </>
               )}
-              <span>{copiedType === 'link' ? 'Invite Link Copied' : 'Copy Invite Link'}</span>
             </button>
           </div>
         </section>
 
-        {/* Right Column: Stats Strip + Apply Friend's Referral Code */}
-        <div className="lg:col-span-5 flex flex-col gap-4 justify-between">
-          {/* 2-Column Clean Metric Cards */}
-          <div className="grid grid-cols-2 gap-3 sm:gap-4">
+        {/* Right Top Column: Real Stats Cards & Redeem Code Card */}
+        <div className="lg:col-span-5 flex flex-col justify-between gap-4">
+          {/* Dual Stat Cards: Total Earnings & Total Friends */}
+          <div className="grid grid-cols-2 gap-3">
             <div className="rounded-2xl bg-white p-4 sm:p-5 shadow-surface-card space-y-2">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#ECFDF5] text-[#0D7A5F]">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#ECFDF5] text-[#064E3B]">
                 <Wallet className="h-5 w-5" aria-hidden="true" />
               </div>
               <div>
                 <p className="text-[11px] sm:text-xs font-medium text-[#5A606D]">
-                  Total Earned
+                  Referral Earning
                 </p>
                 <p
                   data-testid="referral-total-earned"
                   className="mt-0.5 font-display text-2xl font-bold text-[#064E3B] tabular-nums"
                 >
-                  ₹{referralStats.totalEarned.toLocaleString('en-IN')}
+                  ₹{referralEarnings.toLocaleString('en-IN')}
                 </p>
               </div>
             </div>
@@ -236,15 +360,15 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
               </div>
               <div>
                 <p className="text-[11px] sm:text-xs font-medium text-[#5A606D]">
-                  Friends Joined
+                  Referred Players
                 </p>
                 <p
                   data-testid="referral-total-invited"
                   className="mt-0.5 font-display text-2xl font-bold text-[#16181D] tabular-nums"
                 >
-                  {referralStats.totalInvited}
+                  {totalReferred}
                   <span className="ml-1.5 text-xs font-semibold text-[#0D7A5F]">
-                    · {referralStats.creditedCount} active
+                    {totalReferred > 0 ? '· Active' : ''}
                   </span>
                 </p>
               </div>
@@ -265,7 +389,7 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
                   Have a Friend’s Code?
                 </h2>
                 <p className="text-[11px] text-[#3F2915]">
-                  Apply an invite code to link your welcome bonus
+                  Apply an invite code to link your account
                 </p>
               </div>
             </div>
@@ -276,25 +400,12 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
                 className="flex items-center justify-between gap-2 rounded-xl bg-white/90 px-3.5 py-2.5 text-xs font-semibold text-[#064E3B]"
               >
                 <span className="inline-flex items-center gap-1.5">
-                  <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-[#0D7A5F]" aria-hidden="true" />
                   <span>
-                    Code <span className="font-mono font-bold">{appliedCode}</span> applied
+                    Linked to Referrer: <strong className="font-mono font-bold text-[#16181D]">{appliedCode}</strong>
                   </span>
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAppliedCode(null);
-                    try {
-                      window.localStorage.removeItem(APPLIED_REFERRAL_KEY);
-                    } catch {
-                      // ignore
-                    }
-                  }}
-                  className="text-[11px] font-bold text-[#5A606D] hover:text-[#16181D]"
-                >
-                  Change
-                </button>
+                <span className="text-[11px] font-bold text-[#0D7A5F]">Active</span>
               </div>
             ) : (
               <form onSubmit={handleApplyFriendCode} className="space-y-2" noValidate>
@@ -306,31 +417,30 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
                     id="friend-referral-code"
                     data-testid="friend-referral-input"
                     type="text"
-                    maxLength={12}
+                    maxLength={15}
                     value={friendCodeInput}
                     onChange={(e) => {
                       setFriendCodeInput(e.target.value.toUpperCase());
                       if (applyError) setApplyError(null);
+                      if (applySuccess) setApplySuccess(null);
                     }}
-                    placeholder="Enter code (e.g. LBRAHUL)"
+                    placeholder="Enter code (e.g. WAS123)"
                     className="min-w-0 min-h-[44px] flex-1 rounded-xl bg-white/95 px-3.5 py-2 font-mono text-sm font-bold uppercase tracking-wider text-[#16181D] placeholder:font-sans placeholder:text-xs placeholder:font-normal placeholder:normal-case placeholder:tracking-normal placeholder:text-[#8C8F96] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#16181D]/25"
                   />
                   <button
                     type="submit"
                     data-testid="apply-referral-btn"
-                    className="min-h-[44px] rounded-full bg-[#16181D] px-5 py-2 text-xs font-bold text-white shadow-pill-btn transition-colors hover:bg-[#2A2D35] whitespace-nowrap shrink-0"
+                    disabled={submittingCode}
+                    className="min-h-[44px] inline-flex items-center justify-center rounded-xl bg-[#16181D] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#2A2D35] disabled:opacity-60 whitespace-nowrap"
                   >
-                    Apply
+                    {submittingCode ? 'Linking...' : 'Apply'}
                   </button>
                 </div>
                 {applyError && (
-                  <p
-                    role="alert"
-                    data-testid="referral-apply-error"
-                    className="rounded-xl bg-[#991B1B] px-3 py-1.5 text-xs font-medium text-white"
-                  >
-                    {applyError}
-                  </p>
+                  <p className="text-xs font-bold text-[#DC2626]">{applyError}</p>
+                )}
+                {applySuccess && (
+                  <p className="text-xs font-bold text-[#064E3B]">{applySuccess}</p>
                 )}
               </form>
             )}
@@ -338,12 +448,12 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
         </div>
       </div>
 
-      {/* Bottom 2-Column Section: 3-Step Visual Flow + Referred Friends Ledger */}
-      <div className="grid gap-5 lg:grid-cols-12 items-stretch">
-        {/* 3-Step How It Works */}
+      {/* Bottom Row: How It Works & Real Referred Activity */}
+      <div className="grid gap-5 lg:grid-cols-12 items-start">
+        {/* How It Works */}
         <section
-          aria-label="How referral rewards work"
-          className="lg:col-span-5 flex flex-col justify-between rounded-2xl bg-white p-5 sm:p-6 shadow-surface-card space-y-4"
+          aria-label="How referral earnings work"
+          className="lg:col-span-5 rounded-2xl bg-white p-5 sm:p-6 shadow-surface-card space-y-4"
         >
           <h2 className="font-display text-base sm:text-lg font-bold text-[#16181D]">
             How It Works
@@ -357,7 +467,7 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
               <div className="min-w-0">
                 <p className="text-sm font-bold text-[#16181D]">Share Your Code</p>
                 <p className="mt-0.5 text-xs leading-relaxed text-[#5A606D]">
-                  Send your referral code or link directly on WhatsApp.
+                  Send your real invite code <span className="font-mono font-bold text-[#0D7A5F]">{referralCode}</span> on WhatsApp or Telegram.
                 </p>
               </div>
             </li>
@@ -367,9 +477,9 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
                 02
               </span>
               <div className="min-w-0">
-                <p className="text-sm font-bold text-[#16181D]">Friend Plays a Battle</p>
+                <p className="text-sm font-bold text-[#16181D]">Friends Play Battles</p>
                 <p className="mt-0.5 text-xs leading-relaxed text-[#5A606D]">
-                  Your friend joins Ludo league.online and completes a 1v1 Ludo Classic match.
+                  Whenever your referred players create or join any 2-player Ludo battle.
                 </p>
               </div>
             </li>
@@ -379,16 +489,16 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
                 03
               </span>
               <div className="min-w-0">
-                <p className="text-sm font-bold text-[#16181D]">Bonus Unlocks Instantly</p>
+                <p className="text-sm font-bold text-[#16181D]">2% Lifetime Commission</p>
                 <p className="mt-0.5 text-xs leading-relaxed text-[#5A606D]">
-                  ₹50 referral reward is credited straight to your wallet balance.
+                  2% of the battle prize is instantly credited to your wallet balance.
                 </p>
               </div>
             </li>
           </ol>
         </section>
 
-        {/* Referred Friends Activity */}
+        {/* Referred Friends Real Activity */}
         <section
           aria-label="Referred friends activity"
           data-testid="referral-friends-list"
@@ -396,56 +506,81 @@ export function ReferralPage({ playerName }: ReferralPageProps) {
         >
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="font-display text-base sm:text-lg font-bold text-[#16181D]">
-              Invited Friends
+              Referred Friends &amp; Earnings
             </h2>
             <span className="text-xs font-medium text-[#5A606D] tabular-nums">
-              {referralHistory.length} invites
+              {totalReferred} total referred
             </span>
           </div>
 
-          <div className="divide-y divide-[#16181D]/8">
-            {referralHistory.map((item) => (
-              <div
-                key={item.id}
-                className="flex items-center justify-between gap-3 py-3 first:pt-1 last:pb-1"
+          {totalReferred === 0 && liveHistory.length === 0 ? (
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[#16181D]/15 p-8 text-center space-y-2">
+              <Users className="h-8 w-8 text-[#5A606D]/50" aria-hidden="true" />
+              <p className="font-bold text-sm text-[#16181D]">No referred players yet</p>
+              <p className="text-xs text-[#5A606D] max-w-sm">
+                Share your invite code <span className="font-mono font-bold text-[#0D7A5F]">{referralCode}</span> with friends to start earning 2% commission on all their battles!
+              </p>
+              <a
+                href={whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-2 min-h-[38px] inline-flex items-center gap-2 rounded-full bg-[#25D366] px-4 py-1.5 text-xs font-bold text-white shadow-sm"
               >
-                <div className="flex items-center gap-3 min-w-0">
-                  <PlayerAvatar name={item.friendName} size="sm" />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-[#16181D]">
-                      {item.friendName}
-                    </p>
-                    <p className="mt-0.5 text-xs text-[#5A606D] tabular-nums">
-                      <span
-                        className={
-                          item.status === 'Credited'
-                            ? 'font-semibold text-[#0D7A5F]'
-                            : 'font-semibold text-[#92400E]'
-                        }
-                      >
-                        {item.status}
-                      </span>
-                      {' · '}
-                      <span>
-                        {new Date(item.createdAt).toLocaleDateString('en-IN', {
-                          day: 'numeric',
-                          month: 'short',
-                        })}
-                      </span>
-                    </p>
-                  </div>
-                </div>
-
-                <span
-                  className={`font-display text-sm sm:text-base font-bold tabular-nums shrink-0 ${
-                    item.status === 'Credited' ? 'text-[#064E3B]' : 'text-[#5A606D]'
-                  }`}
+                <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Invite Friends Now</span>
+              </a>
+            </div>
+          ) : liveHistory.length > 0 ? (
+            <div className="divide-y divide-[#16181D]/8">
+              {liveHistory.map((item, idx) => (
+                <div
+                  key={item._id || item.id || idx}
+                  className="flex items-center justify-between gap-3 py-3 first:pt-1 last:pb-1"
                 >
-                  +₹{item.bonusAmount.toLocaleString('en-IN')}
-                </span>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <PlayerAvatar name={item.username || item.title || 'Referred Player'} size="sm" />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-[#16181D]">
+                        {item.username || item.title || 'Referred Player'}
+                      </p>
+                      <p className="mt-0.5 text-xs text-[#5A606D] tabular-nums">
+                        <span className="font-semibold text-[#0D7A5F]">Commission Credited</span>
+                        {item.createdAt && (
+                          <>
+                            {' · '}
+                            <span>
+                              {new Date(item.createdAt).toLocaleDateString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                              })}
+                            </span>
+                          </>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  <span className="font-display text-sm sm:text-base font-bold tabular-nums text-[#064E3B] shrink-0">
+                    +₹{Number(item.amount || item.points || 0).toLocaleString('en-IN')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl bg-[#ECFDF5] border border-[#0D7A5F]/20 p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-[#064E3B]">Total Players Reached</span>
+                <span className="font-mono text-sm font-bold text-[#0D7A5F] tabular-nums">{totalReferred} Players</span>
               </div>
-            ))}
-          </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-[#064E3B]">Total Commission Earned</span>
+                <span className="font-mono text-sm font-bold text-[#0D7A5F] tabular-nums">₹{referralEarnings.toLocaleString('en-IN')}</span>
+              </div>
+              <p className="text-[11px] text-[#064E3B]/80 pt-1 border-t border-[#0D7A5F]/15">
+                Commission is auto-credited to your wallet every time a referred friend completes a battle.
+              </p>
+            </div>
+          )}
         </section>
       </div>
     </div>

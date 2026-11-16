@@ -579,3 +579,86 @@ export async function submitLiveMatchCancel(
 
   return { ok: res.status === 200, message: res.error || 'Challenge cancel requested' };
 }
+
+// User Profile & Referral API Integration
+export interface UserProfileData {
+  _id: string;
+  fullName: string;
+  phone: string;
+  referCode: string;
+  totalRefer: number;
+  referelBalance: number;
+  referredBy?: string;
+  wallet: number;
+  winningCash: number;
+  depositCash: number;
+  isKycVerified: boolean;
+}
+
+export async function fetchUserProfileData(token: string): Promise<UserProfileData | null> {
+  const res = await apiRequest<any>('/user/getUserProfileData', {
+    method: 'GET',
+  }, token);
+
+  if (res.status === 200 && res.data) {
+    const raw = res.data?.data || res.data;
+    const profile: UserProfileData = {
+      _id: raw._id || '',
+      fullName: raw.fullName || raw.username || 'Player',
+      phone: raw.phone || '',
+      referCode: raw.referCode || raw.referralCode || '',
+      totalRefer: Number(raw.totalRefer ?? 0),
+      referelBalance: Number(raw.referelBalance ?? raw.referralBalance ?? 0),
+      referredBy: raw.referredBy || raw.refer || '',
+      wallet: Number(raw.wallet ?? 0),
+      winningCash: Number(raw.winningCash ?? 0),
+      depositCash: Number(raw.depositCash ?? 0),
+      isKycVerified: Boolean(raw.isKycVerified),
+    };
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('ludobridge.liveUserProfile', JSON.stringify(profile));
+      }
+    } catch {
+      // ignore storage write errors
+    }
+    return profile;
+  }
+  return null;
+}
+
+export async function applyReferralCode(
+  referCode: string,
+  token: string
+): Promise<{ ok: boolean; message: string }> {
+  const res = await apiRequest('/user/updateUserProfile', {
+    method: 'POST',
+    body: JSON.stringify({ refer: referCode.trim() }),
+  }, token);
+
+  if (res.status === 200) {
+    return { ok: true, message: 'Referral code applied successfully!' };
+  }
+  return { ok: false, message: res.error || 'Failed to apply referral code' };
+}
+
+export async function fetchLiveReferralHistory(
+  token: string,
+  page: number = 1
+): Promise<any[]> {
+  const res = await apiRequest<any>(`/history/${page}/all/allSubCategory`, {
+    method: 'GET',
+  }, token);
+
+  if (res.status === 200 && res.data) {
+    const raw = res.data?.data || res.data;
+    if (Array.isArray(raw)) {
+      return raw.filter((item: any) =>
+        item?.type?.toLowerCase()?.includes('refer') ||
+        item?.title?.toLowerCase()?.includes('refer') ||
+        item?.category === 'referral'
+      );
+    }
+  }
+  return [];
+}
