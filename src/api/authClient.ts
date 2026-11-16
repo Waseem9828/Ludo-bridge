@@ -38,14 +38,43 @@ export interface VerifyOtpResponse {
 export function readStoredAuthSession(): StoredAuthSession | null {
   try {
     const raw = window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredAuthSession;
-    if (parsed?.token && parsed?.user?.id && parsed?.user?.mobile) {
-      return parsed;
+    if (raw) {
+      const parsed = JSON.parse(raw) as StoredAuthSession;
+      if (parsed?.token && parsed?.user?.id && parsed?.user?.mobile) {
+        return parsed;
+      }
     }
   } catch {
     // ignore
   }
+
+  // Fallback: check document.cookie
+  try {
+    if (typeof document !== 'undefined') {
+      const cookies = Object.fromEntries(
+        document.cookie.split('; ').map((c) => {
+          const [k, ...v] = c.split('=');
+          return [k, decodeURIComponent(v.join('='))];
+        })
+      );
+      if (cookies.token && cookies.userId && cookies.phone) {
+        return {
+          token: cookies.token,
+          user: {
+            id: cookies.userId,
+            name: cookies.fullName || 'Player',
+            mobile: cookies.phone,
+            avatarId: 'avatar-amber-king',
+            createdAt: new Date().toISOString(),
+            lastLoginAt: new Date().toISOString(),
+          },
+        };
+      }
+    }
+  } catch {
+    // ignore
+  }
+
   return null;
 }
 
@@ -53,8 +82,23 @@ export function writeStoredAuthSession(session: StoredAuthSession | null): void 
   try {
     if (!session) {
       window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+      if (typeof document !== 'undefined') {
+        document.cookie = 'token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        document.cookie = 'userId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        document.cookie = 'fullName=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        document.cookie = 'phone=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        document.cookie = 'isLoggedIn=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+      }
     } else {
       window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(session));
+      if (typeof document !== 'undefined') {
+        const maxAge = 365 * 24 * 60 * 60;
+        document.cookie = `token=${session.token}; path=/; max-age=${maxAge}; SameSite=Lax`;
+        document.cookie = `userId=${session.user.id}; path=/; max-age=${maxAge}; SameSite=Lax`;
+        document.cookie = `fullName=${encodeURIComponent(session.user.name)}; path=/; max-age=${maxAge}; SameSite=Lax`;
+        document.cookie = `phone=${session.user.mobile}; path=/; max-age=${maxAge}; SameSite=Lax`;
+        document.cookie = `isLoggedIn=true; path=/; max-age=${maxAge}; SameSite=Lax`;
+      }
     }
   } catch {
     // ignore

@@ -826,6 +826,7 @@ export default function App() {
   const { connected: wsConnected } = useMatchmakingSocket({
     roomCode: view === 'room' ? activeRoom?.code ?? null : null,
     playerId: view === 'room' ? activePlayerId : null,
+    authSession,
     onHubSnapshot: (snapshot) => {
       setHub(snapshot);
       setLoadingHub(false);
@@ -1142,6 +1143,10 @@ export default function App() {
       });
       playSound('lobbyEnter');
       navigateToRoute('lobby');
+      void fetchHubSnapshot().then((snapshot) => {
+        setHub(snapshot);
+        setLoadingHub(false);
+      }).catch(() => {});
     },
     [handleSaveAvatar, handleSavePlayerName, navigateToRoute]
   );

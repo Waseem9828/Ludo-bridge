@@ -61,8 +61,22 @@ export async function fetchHubSnapshot(): Promise<HubSnapshot> {
   const session = readStoredAuthSession();
   if (session?.token && session?.user?.id) {
     const socket = getOrCreateLiveSocket({ token: session.token, userId: session.user.id });
-    if (socket?.connected) {
-      socket.send(JSON.stringify({ type: 'getChallenges', payload: { userId: session.user.id } }));
+    if (socket) {
+      if (socket.connected) {
+        try {
+          socket.send(JSON.stringify({ type: 'getChallenges', payload: { userId: session.user.id } }));
+        } catch {
+          // ignore
+        }
+      } else {
+        socket.once('connect', () => {
+          try {
+            socket.send(JSON.stringify({ type: 'getChallenges', payload: { userId: session.user.id } }));
+          } catch {
+            // ignore
+          }
+        });
+      }
     }
   }
   return cachedHubSnapshot;

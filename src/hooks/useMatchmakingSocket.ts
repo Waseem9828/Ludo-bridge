@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { HubSnapshot, MatchRoom } from '../shared/matchmaking';
-import { readStoredAuthSession } from '../api/authClient';
+import { readStoredAuthSession, type StoredAuthSession } from '../api/authClient';
 import {
   getOrCreateLiveSocket,
   registerSocketListeners,
+  requestLiveChallenges,
   type MkgChallenge,
 } from '../api/liveBackendClient';
 import {
@@ -15,6 +16,7 @@ import {
 interface UseMatchmakingSocketOptions {
   roomCode: string | null;
   playerId: string | null;
+  authSession?: StoredAuthSession | null;
   onHubSnapshot: (snapshot: HubSnapshot) => void;
   onRoomUpdated: (room: MatchRoom) => void;
   onRoomClosed: (code: string) => void;
@@ -28,6 +30,7 @@ interface UseMatchmakingSocketOptions {
 export function useMatchmakingSocket({
   roomCode,
   playerId,
+  authSession,
   onHubSnapshot,
   onRoomUpdated,
   onRoomClosed,
@@ -74,28 +77,51 @@ export function useMatchmakingSocket({
       },
     });
 
-    const session = readStoredAuthSession();
+    const session = authSession || readStoredAuthSession();
     if (session?.token && session?.user?.id) {
       const socket = getOrCreateLiveSocket({ token: session.token, userId: session.user.id });
       if (socket) {
         if (socket.connected) {
           setConnected(true);
+          requestLiveChallenges(session.user.id);
         }
         socket.on('connect', () => {
           if (!active) return;
           setConnected(true);
+          requestLiveChallenges(session.user.id);
         });
         socket.on('disconnect', () => {
           if (!active) return;
           setConnected(false);
         });
       }
+
+      // Visibility change refresh (identical to live working app)
+      const onVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+          requestLiveChallenges(session.user.id);
+        }
+      };
+      document.addEventListener('visibilitychange', onVisibilityChange);
+
+      // Periodic refresh interval to keep battle lobbies live
+      const intervalId = window.setInterval(() => {
+        if (active) {
+          requestLiveChallenges(session.user.id);
+        }
+      }, 5000);
+
+      return () => {
+        active = false;
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+        window.clearInterval(intervalId);
+      };
     }
 
     return () => {
       active = false;
     };
-  }, [roomCode, playerId]);
+  }, [roomCode, playerId, authSession?.token, authSession?.user?.id]);
 
   return { connected };
 }

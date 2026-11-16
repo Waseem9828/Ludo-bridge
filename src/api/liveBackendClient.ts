@@ -233,18 +233,39 @@ export function getOrCreateLiveSocket(auth: { token: string; userId: string } | 
     },
   });
 
+  const requestInit = () => {
+    if (!socketInstance?.connected) return;
+    try {
+      socketInstance.emit('getUserWallet', JSON.stringify({ payload: { userId: auth.userId } }));
+      socketInstance.send(JSON.stringify({ type: 'getChallenges', payload: { userId: auth.userId } }));
+      socketInstance.emit('message', JSON.stringify({ type: 'getSettings', payload: { userId: auth.userId } }));
+    } catch {
+      // ignore
+    }
+  };
+
   socketInstance.on('connect', () => {
-    // Initial fetch requests
-    socketInstance?.emit('getUserWallet', JSON.stringify({ payload: { userId: auth.userId } }));
-    socketInstance?.send(JSON.stringify({ type: 'getChallenges', payload: { userId: auth.userId } }));
-    socketInstance?.emit('message', JSON.stringify({ type: 'getSettings', payload: { userId: auth.userId } }));
+    requestInit();
+    setTimeout(requestInit, 500);
+    setTimeout(requestInit, 1500);
+  });
+
+  socketInstance.on('reconnect', () => {
+    requestInit();
   });
 
   socketInstance.on('getChallenges', (raw: any) => {
     try {
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (Array.isArray(parsed)) {
-        socketListeners.onChallenges?.(parsed);
+      const list = Array.isArray(parsed)
+        ? parsed
+        : (Array.isArray(parsed?.data)
+            ? parsed.data
+            : (Array.isArray(parsed?.challenges)
+                ? parsed.challenges
+                : (Array.isArray(parsed?.payload) ? parsed.payload : null)));
+      if (list) {
+        socketListeners.onChallenges?.(list);
       }
     } catch {
       if (Array.isArray(raw)) socketListeners.onChallenges?.(raw);
@@ -254,17 +275,24 @@ export function getOrCreateLiveSocket(auth: { token: string; userId: string } | 
   socketInstance.on('stream', (raw: any) => {
     try {
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (parsed?._id) {
-        socketListeners.onStream?.(parsed);
+      const item = parsed?.data || parsed;
+      if (item?._id) {
+        socketListeners.onStream?.(item);
       }
     } catch {
       if (raw?._id) socketListeners.onStream?.(raw);
     }
   });
 
-  socketInstance.on('deleteChallenge', (id: any) => {
-    const idStr = typeof id === 'string' ? id : (id?._id || String(id));
-    socketListeners.onDeleteChallenge?.(idStr);
+  socketInstance.on('deleteChallenge', (raw: any) => {
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const idStr = typeof parsed === 'string' ? parsed : (parsed?._id || parsed?.id || String(parsed));
+      socketListeners.onDeleteChallenge?.(idStr);
+    } catch {
+      const idStr = typeof raw === 'string' ? raw : (raw?._id || String(raw));
+      socketListeners.onDeleteChallenge?.(idStr);
+    }
   });
 
   socketInstance.on('getUserWallet', (raw: any) => {
@@ -310,6 +338,17 @@ export function getOrCreateLiveSocket(auth: { token: string; userId: string } | 
 
 export function registerSocketListeners(listeners: typeof socketListeners): void {
   socketListeners = { ...socketListeners, ...listeners };
+}
+
+export function requestLiveChallenges(userId?: string): void {
+  const uid = userId || currentSocketAuth?.userId;
+  if (!uid || !socketInstance) return;
+  try {
+    socketInstance.send(JSON.stringify({ type: 'getChallenges', payload: { userId: uid } }));
+    socketInstance.emit('getUserWallet', JSON.stringify({ payload: { userId: uid } }));
+  } catch {
+    // ignore
+  }
 }
 
 export function getApiBaseUrl(): string {
