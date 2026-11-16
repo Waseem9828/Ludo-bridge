@@ -140,6 +140,63 @@ export function MatchRoom({
         : 'bg-[#D97706]'
     : 'bg-[#0D7A5F]';
 
+  const handleCopyAndOpenLudoKing = async (
+    e: React.MouseEvent<HTMLAnchorElement>
+  ) => {
+    const rawCode = room.ludoKingRoomCode ?? '';
+    const cleanCode = String(rawCode).trim().replace(/[\s-]+/g, '');
+    if (!cleanCode) return;
+
+    // 1 & 2: Dynamic Ludo King Join URL with gt=0&po=0
+    const lkJoinUrl = buildLudoKingDeepLink(cleanCode);
+
+    // 3: Copy room code to clipboard (preserving leading zeroes)
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(cleanCode);
+        copied = true;
+      }
+    } catch {
+      // Fallback below
+    }
+    if (!copied && typeof document !== 'undefined') {
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = cleanCode;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        copied = document.execCommand('copy');
+        document.body.removeChild(textarea);
+      } catch {
+        // Clipboard unavailable in restricted contexts
+      }
+    }
+
+    // 6: Success feedback
+    setCopiedCode(true);
+    window.setTimeout(() => {
+      setCopiedCode(false);
+    }, 2500);
+
+    // 4 & 5: Try to open via App Link / Universal Link on Android/iOS; browser fallback
+    const isMobile =
+      typeof navigator !== 'undefined' &&
+      /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+
+    if (isMobile) {
+      e.preventDefault();
+      try {
+        window.location.href = lkJoinUrl;
+      } catch {
+        window.open(lkJoinUrl, '_blank', 'noopener,noreferrer');
+      }
+    }
+  };
+
   const copyLudoCode = async (value: string) => {
     const cleanCode = String(value ?? '').trim().replace(/[\s-]+/g, '');
     let copied = false;
@@ -432,12 +489,10 @@ export function MatchRoom({
               </div>
               <a
                 data-testid="copy-and-open-ludo-btn"
-                href={buildLudoKingDeepLink(room.ludoKingRoomCode)}
+                href={room.ludoKingRoomCode ? buildLudoKingDeepLink(room.ludoKingRoomCode) : '#'}
                 target="_blank"
                 rel="noopener noreferrer"
-                onClick={() => {
-                  void copyLudoCode(room.ludoKingRoomCode!);
-                }}
+                onClick={handleCopyAndOpenLudoKing}
                 aria-label={`Copy room code ${room.ludoKingRoomCode} and open Ludo King`}
                 className="inline-flex min-h-[42px] items-center gap-1.5 rounded-full bg-white px-3 sm:px-4 py-2 text-xs font-bold text-[#064E3B] shadow-pill-btn transition-colors hover:bg-[#FAF9F5] whitespace-nowrap shrink-0"
               >
@@ -446,7 +501,7 @@ export function MatchRoom({
                 ) : (
                   <Copy className="h-3.5 w-3.5" aria-hidden="true" />
                 )}
-                <span>{copiedCode ? 'Copied!' : 'Copy & Open'}</span>
+                <span>{copiedCode ? 'Copied & Opening...' : 'Copy & Open'}</span>
                 <ExternalLink className="h-3 w-3 opacity-75" aria-hidden="true" />
               </a>
               <button

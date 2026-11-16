@@ -223,7 +223,7 @@ test('validateWalletTransaction validates deposit and withdrawal rules', () => {
   });
 });
 
-test('validateLudoKingCode enforces 8 numeric digits starting with 0 and strips spaces/hyphens', () => {
+test('validateLudoKingCode enforces 8 numeric digits and strips spaces/hyphens', () => {
   assert.deepEqual(validateLudoKingCode('01234567'), {
     valid: true,
     value: '01234567',
@@ -236,7 +236,8 @@ test('validateLudoKingCode enforces 8 numeric digits starting with 0 and strips 
     valid: true,
     value: '00001234',
   });
-  assert.equal(validateLudoKingCode('48291034').valid, false);
+  assert.equal(validateLudoKingCode('05757682').valid, true);
+  assert.equal(validateLudoKingCode('12345678').valid, true);
   assert.equal(validateLudoKingCode('0123456').valid, false);
   assert.equal(validateLudoKingCode('012345678').valid, false);
   assert.equal(validateLudoKingCode('0123ABCD').valid, false);
@@ -247,10 +248,18 @@ test('formatLudoKingCode groups 8-digit and 6-digit codes clearly', () => {
   assert.equal(formatLudoKingCode('482910'), '482 910');
 });
 
-test('buildLudoKingDeepLink embeds clean 8-digit room code into rmc query parameter', () => {
+test('buildLudoKingDeepLink embeds clean 8-digit room code into rmc query parameter preserving leading zeros', () => {
   assert.equal(
-    buildLudoKingDeepLink('01584958'),
-    'https://lk.gggred.com/?rmc=01584958&gt=0&po=0'
+    buildLudoKingDeepLink('05757682'),
+    'https://lk.gggred.com/?rmc=05757682&gt=0&po=0'
+  );
+  assert.equal(
+    buildLudoKingDeepLink('01234567'),
+    'https://lk.gggred.com/?rmc=01234567&gt=0&po=0'
+  );
+  assert.equal(
+    buildLudoKingDeepLink('12345678'),
+    'https://lk.gggred.com/?rmc=12345678&gt=0&po=0'
   );
   assert.equal(
     buildLudoKingDeepLink(' 0158 4958 '),
