@@ -1171,6 +1171,16 @@ export function sumBattleAmounts(rooms: Array<Pick<MatchRoom, 'amount'>>): numbe
   );
 }
 
+/**
+ * Total combined table pool across 2-player battles (each player stakes `room.amount`,
+ * so a ₹100 battle represents a ₹200 total pool).
+ */
+export function sumBattlePoolAmounts(
+  rooms: Array<Pick<MatchRoom, 'amount'>>
+): number {
+  return sumBattleAmounts(rooms) * 2;
+}
+
 export function createPersonalMatchRecordFromRoom(
   room: MatchRoom
 ): CompletedMatchRecord | null {

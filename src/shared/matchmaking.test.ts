@@ -36,6 +36,7 @@ import {
   partitionLobbyBattles,
   pickOpponentColor,
   sumBattleAmounts,
+  sumBattlePoolAmounts,
   validateBattleAmount,
   validateBattleEligibility,
   validateCancelReason,
@@ -570,13 +571,20 @@ test('getMockLeaderboardData ranks players descending by earnings and includes c
   assert.notEqual(weekly[0].playerName, monthly[0].playerName);
 });
 
-test('sumBattleAmounts sums seeded open and running battle amounts accurately', () => {
+test('sumBattleAmounts and sumBattlePoolAmounts sum seeded open and running battle amounts accurately', () => {
   const store = createInitialMockStore(1_700_000_000_000);
   const snapshot = buildHubSnapshotFromStore(store);
   assert.equal(sumBattleAmounts(snapshot.openLobbies), 0);
   assert.equal(sumBattleAmounts(snapshot.runningBattles), 18590);
   assert.equal(sumBattleAmounts([{ amount: 100 }, { amount: 250 }]), 350);
   assert.equal(sumBattleAmounts([]), 0);
+
+  // Each 2-player battle has both players staking `amount`, so ₹100 battle => ₹200 pool
+  assert.equal(sumBattlePoolAmounts([{ amount: 100 }]), 200);
+  assert.equal(sumBattlePoolAmounts([{ amount: 100 }, { amount: 250 }]), 700);
+  assert.equal(sumBattlePoolAmounts(snapshot.openLobbies), 0);
+  assert.equal(sumBattlePoolAmounts(snapshot.runningBattles), 37180);
+  assert.equal(sumBattlePoolAmounts([]), 0);
 });
 
 test('post-match result confirmation handles winner-first and loser-first flows transparently', () => {

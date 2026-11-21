@@ -7,6 +7,7 @@ import {
   isBattleResultPendingApproval,
   mergeAnimatedBattles,
   partitionLobbyBattles,
+  sumBattlePoolAmounts,
   validateBattleAmount,
   type AnimatedBattleEntry,
   type AvatarId,
@@ -50,6 +51,7 @@ export function MatchmakerHub({
   const [submitting, setSubmitting] = useState(false);
   const [busyCode, setBusyCode] = useState<string | null>(null);
   const [detailBattleCode, setDetailBattleCode] = useState<string | null>(null);
+  const [battleFilter, setBattleFilter] = useState<'all' | 'open' | 'running'>('all');
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   const combinedMyRooms = useMemo(
@@ -67,6 +69,14 @@ export function MatchmakerHub({
       }),
     [combinedMyRooms, hub.openLobbies, hub.runningBattles, playerName]
   );
+
+  const openPoolTotal = useMemo(() => sumBattlePoolAmounts(openList), [openList]);
+  const runningPoolTotal = useMemo(
+    () => sumBattlePoolAmounts(runningList),
+    [runningList]
+  );
+  const allPoolTotal = openPoolTotal + runningPoolTotal;
+  const totalBattlesCount = openList.length + runningList.length;
 
   const selectedDetailRoom = useMemo(
     () =>
@@ -273,6 +283,98 @@ export function MatchmakerHub({
         </div>
       )}
 
+      {/* Battle List Filter with 2x Combined Pool Totals */}
+      <div
+        role="group"
+        aria-label="Battle list filter"
+        data-testid="battle-list-filter"
+        className="w-full shrink-0 grid grid-cols-3 gap-1.5 rounded-2xl border border-[#16181D]/10 bg-white p-1.5 shadow-surface-card"
+      >
+        <button
+          type="button"
+          aria-pressed={battleFilter === 'all'}
+          data-testid="battle-filter-all"
+          onClick={() => setBattleFilter('all')}
+          className={`min-h-[48px] flex flex-col items-center justify-center rounded-xl px-2 py-1.5 transition-colors ${
+            battleFilter === 'all'
+              ? 'bg-[#064E3B] text-white shadow-xs'
+              : 'bg-transparent text-[#5A606D] hover:bg-[#F8F7F4] hover:text-[#16181D]'
+          }`}
+        >
+          <span
+            className={`text-[11px] sm:text-xs font-semibold whitespace-nowrap truncate max-w-full ${
+              battleFilter === 'all' ? 'text-[#A7F3D0]' : 'text-[#5A606D]'
+            }`}
+          >
+            All<span className="hidden sm:inline"> Battles</span> ({totalBattlesCount})
+          </span>
+          <span
+            data-testid="battle-filter-all-total"
+            className={`mt-0.5 font-display text-xs sm:text-sm font-bold tabular-nums whitespace-nowrap ${
+              battleFilter === 'all' ? 'text-[#FCD34D]' : 'text-[#16181D]'
+            }`}
+          >
+            ₹{allPoolTotal.toLocaleString('en-IN')}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          aria-pressed={battleFilter === 'open'}
+          data-testid="battle-filter-open"
+          onClick={() => setBattleFilter('open')}
+          className={`min-h-[48px] flex flex-col items-center justify-center rounded-xl px-2 py-1.5 transition-colors ${
+            battleFilter === 'open'
+              ? 'bg-[#064E3B] text-white shadow-xs'
+              : 'bg-transparent text-[#5A606D] hover:bg-[#F8F7F4] hover:text-[#16181D]'
+          }`}
+        >
+          <span
+            className={`text-[11px] sm:text-xs font-semibold whitespace-nowrap truncate max-w-full ${
+              battleFilter === 'open' ? 'text-[#A7F3D0]' : 'text-[#5A606D]'
+            }`}
+          >
+            Open<span className="hidden sm:inline"> Battles</span> ({openList.length})
+          </span>
+          <span
+            data-testid="battle-filter-open-total"
+            className={`mt-0.5 font-display text-xs sm:text-sm font-bold tabular-nums whitespace-nowrap ${
+              battleFilter === 'open' ? 'text-[#FCD34D]' : 'text-[#0D7A5F]'
+            }`}
+          >
+            ₹{openPoolTotal.toLocaleString('en-IN')}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          aria-pressed={battleFilter === 'running'}
+          data-testid="battle-filter-running"
+          onClick={() => setBattleFilter('running')}
+          className={`min-h-[48px] flex flex-col items-center justify-center rounded-xl px-2 py-1.5 transition-colors ${
+            battleFilter === 'running'
+              ? 'bg-[#064E3B] text-white shadow-xs'
+              : 'bg-transparent text-[#5A606D] hover:bg-[#F8F7F4] hover:text-[#16181D]'
+          }`}
+        >
+          <span
+            className={`text-[11px] sm:text-xs font-semibold whitespace-nowrap truncate max-w-full ${
+              battleFilter === 'running' ? 'text-[#A7F3D0]' : 'text-[#5A606D]'
+            }`}
+          >
+            Running<span className="hidden sm:inline"> Battles</span> ({runningList.length})
+          </span>
+          <span
+            data-testid="battle-filter-running-total"
+            className={`mt-0.5 font-display text-xs sm:text-sm font-bold tabular-nums whitespace-nowrap ${
+              battleFilter === 'running' ? 'text-[#FCD34D]' : 'text-[#0D7A5F]'
+            }`}
+          >
+            ₹{runningPoolTotal.toLocaleString('en-IN')}
+          </span>
+        </button>
+      </div>
+
       {/* Full-Width Battles List (No Outer Green Container) */}
       <section
         aria-label="Battles"
@@ -284,12 +386,22 @@ export function MatchmakerHub({
           className="flex-1 space-y-5"
         >
           {/* Open Battles */}
+          {battleFilter !== 'running' && (
           <div id="open-battles">
             <PageTitleHeading
               title="Open Battles"
               as="h2"
               testId="open-battles-divider"
             />
+            <p
+              data-testid="open-battles-total"
+              className="mt-1 text-center text-xs font-medium text-[#5A606D] tabular-nums"
+            >
+              {openList.length} {openList.length === 1 ? 'battle' : 'battles'} · Total Pool{' '}
+              <span className="font-bold text-[#0D7A5F]">
+                ₹{openPoolTotal.toLocaleString('en-IN')}
+              </span>
+            </p>
 
             <div className="mt-3 space-y-2.5">
               {loadingHub ? (
@@ -470,14 +582,25 @@ export function MatchmakerHub({
               )}
             </div>
           </div>
+          )}
 
           {/* Running Battles Divider */}
-          <div id="running-battles" className="pt-1">
+          {battleFilter !== 'open' && (
+          <div id="running-battles" className={battleFilter === 'all' ? 'pt-1' : ''}>
             <PageTitleHeading
               title="Running Battles"
               as="h2"
               testId="running-battles-divider"
             />
+            <p
+              data-testid="running-battles-total"
+              className="mt-1 text-center text-xs font-medium text-[#5A606D] tabular-nums"
+            >
+              {runningList.length} {runningList.length === 1 ? 'battle' : 'battles'} · Total Pool{' '}
+              <span className="font-bold text-[#0D7A5F]">
+                ₹{runningPoolTotal.toLocaleString('en-IN')}
+              </span>
+            </p>
 
             <div className="mt-3 space-y-2.5">
               {runningEntries.length === 0 ? (
@@ -546,6 +669,7 @@ export function MatchmakerHub({
               )}
             </div>
           </div>
+          )}
         </div>
       </section>
 
