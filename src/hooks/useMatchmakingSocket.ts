@@ -12,6 +12,42 @@ import {
   updateSingleCachedChallenge,
   removeCachedChallenge,
 } from '../api/matchmakingClient';
+import { captureBattleProfilesOnServer } from '../api/battleProfilesClient';
+import {
+  extractCaptureInputFromExternalChallenge,
+  type BattleProfileCaptureInput,
+} from '../shared/battleProfiles';
+
+function getKnownCurrentUserForCapture(authSession?: StoredAuthSession | null): {
+  id?: string;
+  name?: string;
+  mobile?: string;
+  referralCode?: string;
+} | null {
+  const session = authSession || readStoredAuthSession();
+  let savedPhone = session?.user?.mobile || '';
+  if (!savedPhone && typeof window !== 'undefined') {
+    try {
+      const liveProfileRaw = window.localStorage.getItem('ludobridge.liveUserProfile');
+      if (liveProfileRaw) {
+        const parsed = JSON.parse(liveProfileRaw) as { phone?: string };
+        if (parsed?.phone) savedPhone = parsed.phone;
+      }
+      if (!savedPhone) {
+        savedPhone = window.localStorage.getItem('ludobridge.playerPhone') || '';
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (!session?.user && !savedPhone) return null;
+  return {
+    id: session?.user?.id,
+    name: session?.user?.name,
+    mobile: savedPhone,
+    referralCode: session?.user?.referralCode,
+  };
+}
 
 interface UseMatchmakingSocketOptions {
   roomCode: string | null;
@@ -58,6 +94,18 @@ export function useMatchmakingSocket({
         if (!active) return;
         const snapshot = updateCachedChallenges(challenges);
         callbacksRef.current.onHubSnapshot(snapshot);
+        const currentUser = getKnownCurrentUserForCapture(authSession);
+        const inputs: BattleProfileCaptureInput[] = [];
+        for (const ch of Array.isArray(challenges) ? challenges : []) {
+          const captured = extractCaptureInputFromExternalChallenge(
+            ch as unknown as Record<string, unknown> & { _id: string },
+            currentUser
+          );
+          if (captured) inputs.push(captured);
+        }
+        if (inputs.length > 0) {
+          void captureBattleProfilesOnServer(inputs).catch(() => {});
+        }
       },
       onStream: (challenge: MkgChallenge) => {
         if (!active) return;
@@ -66,6 +114,14 @@ export function useMatchmakingSocket({
           callbacksRef.current.onRoomUpdated(room);
         }
         callbacksRef.current.onHubSnapshot(snapshot);
+        const currentUser = getKnownCurrentUserForCapture(authSession);
+        const captured = extractCaptureInputFromExternalChallenge(
+          challenge as unknown as Record<string, unknown> & { _id: string },
+          currentUser
+        );
+        if (captured) {
+          void captureBattleProfilesOnServer([captured]).catch(() => {});
+        }
       },
       onDeleteChallenge: (id: string) => {
         if (!active) return;

@@ -16,6 +16,7 @@ import {
   Gift,
   Image as ImageIcon,
   Menu,
+  Phone,
   RefreshCw,
   RotateCcw,
   Search,
@@ -59,10 +60,23 @@ import {
   type HubSnapshot,
   type MatchRoom,
 } from '../shared/matchmaking';
+import {
+  captureBattleProfilesOnServer,
+  deleteBattleProfile,
+  fetchBattleProfiles,
+  saveBattleProfilePhone,
+  saveManualBattleProfile,
+} from '../api/battleProfilesClient';
+import {
+  extractCaptureInputFromMatchRoom,
+  type BattleUserProfile,
+} from '../shared/battleProfiles';
+import { BattleProfilesPanel } from './BattleProfilesPanel';
 
-type AdminTab =
+export type AdminTab =
   | 'overview'
   | 'matches'
+  | 'battle-profiles'
   | 'deposits'
   | 'withdrawals'
   | 'penalties'
@@ -75,6 +89,7 @@ interface AdminPanelPageProps {
   hubSnapshot?: HubSnapshot;
   authToken?: string | null;
   onRefreshBattles?: () => Promise<void> | void;
+  initialTab?: AdminTab;
 }
 
 const PENALTY_PRESETS = [
@@ -97,14 +112,23 @@ export function AdminPanelPage({
   hubSnapshot,
   authToken,
   onRefreshBattles,
+  initialTab,
 }: AdminPanelPageProps) {
-  const [activeTab, setActiveTab] = useState<AdminTab>('overview');
+  const [activeTab, setActiveTab] = useState<AdminTab>(initialTab ?? 'overview');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<AdminDashboardSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [battleProfiles, setBattleProfiles] = useState<BattleUserProfile[]>([]);
+  const [loadingProfiles, setLoadingProfiles] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
 
   // Sync live battles from user-side API into admin panel rooms
   useEffect(() => {
@@ -214,22 +238,59 @@ export function AdminPanelPage({
     setPenPlayerId((prev) => prev || next.admin.players[0]?.id || '');
   }, []);
 
+  const loadBattleProfiles = useCallback(async () => {
+    setLoadingProfiles(true);
+    try {
+      const res = await fetchBattleProfiles();
+      if (Array.isArray(res.profiles)) {
+        setBattleProfiles(res.profiles);
+      }
+    } catch {
+      // keep existing profiles if transient failure
+    } finally {
+      setLoadingProfiles(false);
+    }
+  }, []);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const data = await fetchAdminState();
+      const [data] = await Promise.all([
+        fetchAdminState(),
+        loadBattleProfiles(),
+      ]);
       applySnapshot(data);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to load admin state.');
     } finally {
       setLoading(false);
     }
-  }, [applySnapshot]);
+  }, [applySnapshot, loadBattleProfiles]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Ensure any live rooms currently visible in hubSnapshot are captured into Battle Profiles
+  useEffect(() => {
+    if (!hubSnapshot) return;
+    const liveRooms = [
+      ...hubSnapshot.openLobbies,
+      ...hubSnapshot.runningBattles,
+    ].filter((r) => !r.isDemo && r.players.length > 0);
+    if (liveRooms.length === 0) return;
+    const captureInputs = liveRooms.map((room) =>
+      extractCaptureInputFromMatchRoom(room, { source: 'live_socket' })
+    );
+    void captureBattleProfilesOnServer(captureInputs)
+      .then((res) => {
+        if (Array.isArray(res.profiles)) {
+          setBattleProfiles(res.profiles);
+        }
+      })
+      .catch(() => {});
+  }, [hubSnapshot]);
 
   const runAdminMutation = async (
     key: string,
@@ -355,6 +416,7 @@ export function AdminPanelPage({
   }> = [
     { id: 'overview', label: 'Overview & Earnings', Icon: Calculator },
     { id: 'matches', label: 'Match Control', badge: disputedRoomsCount, Icon: Gamepad2 },
+    { id: 'battle-profiles', label: 'Battle Profiles', badge: battleProfiles.length, Icon: Phone },
     { id: 'deposits', label: 'Deposits', badge: pendingDepositsCount, Icon: ArrowDownLeft },
     { id: 'withdrawals', label: 'Withdrawals', badge: pendingWithdrawalsCount, Icon: ArrowUpRight },
     { id: 'penalties', label: 'Penalties', Icon: ShieldAlert },
@@ -554,8 +616,8 @@ export function AdminPanelPage({
               <Menu className="h-5 w-5" aria-hidden="true" />
             </button>
             <div className="flex items-center gap-2 text-xs sm:text-sm min-w-0">
-              <span className="font-semibold text-slate-500 whitespace-nowrap">Admin</span>
-              <span className="text-slate-300">/</span>
+              <span className="hidden sm:inline font-semibold text-slate-500 whitespace-nowrap">Admin</span>
+              <span className="hidden sm:inline text-slate-300">/</span>
               <h1 className="font-display font-bold text-slate-900 truncate">
                 {activeNavTitle}
               </h1>
@@ -580,7 +642,7 @@ export function AdminPanelPage({
               href="https://mkgadmin2.mkgplayers.com"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50 px-3 py-1.5 text-xs font-bold text-purple-700 hover:bg-purple-100 whitespace-nowrap"
+              className="hidden sm:inline-flex min-h-[38px] items-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50 px-3 py-1.5 text-xs font-bold text-purple-700 hover:bg-purple-100 whitespace-nowrap"
             >
               <span>Live Admin Portal</span>
             </a>
@@ -2626,6 +2688,34 @@ export function AdminPanelPage({
                     </div>
                   </section>
                 </div>
+              )}
+
+              {activeTab === 'battle-profiles' && (
+                <BattleProfilesPanel
+                  profiles={battleProfiles}
+                  loading={loadingProfiles}
+                  onRefresh={async () => {
+                    await Promise.all([
+                      loadBattleProfiles(),
+                      onRefreshBattles?.(),
+                    ]);
+                  }}
+                  onAddProfile={async (input) => {
+                    const res = await saveManualBattleProfile(input);
+                    setBattleProfiles(res.profiles);
+                    notifySuccess(`Saved battle profile for ${input.name} with phone.`);
+                  }}
+                  onUpdatePhone={async (profileId, phone) => {
+                    const res = await saveBattleProfilePhone(profileId, phone);
+                    setBattleProfiles(res.profiles);
+                    notifySuccess('Updated mobile number on battle user profile.');
+                  }}
+                  onDeleteProfile={async (profileId) => {
+                    const res = await deleteBattleProfile(profileId);
+                    setBattleProfiles(res.profiles);
+                    notifySuccess('Removed profile from battle list.');
+                  }}
+                />
               )}
             </>
           ) : null}

@@ -14,6 +14,8 @@ import {
   type HubSnapshot,
   type MatchRoom,
 } from '../shared/matchmaking';
+import { formatIndianMobile } from '../shared/auth';
+import { validateRequiredBattlePhone } from '../shared/battleProfiles';
 import { LobbyBattleDetailSheet } from './LobbyBattleDetailSheet';
 import { PageTitleHeading } from './PageTitleHeading';
 import { PlayerAvatar } from './PlayerAvatar';
@@ -24,8 +26,9 @@ interface MatchmakerHubProps {
   hostedRooms: Record<string, string>;
   myRooms: Record<string, string>;
   playerName: string;
+  playerPhone?: string;
   playerAvatarId: AvatarId;
-  onCreateBattle: (amount: number) => Promise<void>;
+  onCreateBattle: (amount: number, phone?: string) => Promise<void>;
   onJoinLobby: (code: string) => Promise<void>;
   onDeleteLobby: (code: string, playerId: string) => Promise<void>;
   onEnterBattle: (room: MatchRoom) => void;
@@ -38,6 +41,7 @@ export function MatchmakerHub({
   hostedRooms,
   myRooms,
   playerName,
+  playerPhone,
   playerAvatarId,
   onCreateBattle,
   onJoinLobby,
@@ -46,6 +50,7 @@ export function MatchmakerHub({
   onRefreshHub,
 }: MatchmakerHubProps) {
   const [amountInput, setAmountInput] = useState('');
+  const [phoneInput, setPhoneInput] = useState(playerPhone ?? '');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [actionErrorMsg, setActionErrorMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -53,6 +58,17 @@ export function MatchmakerHub({
   const [detailBattleCode, setDetailBattleCode] = useState<string | null>(null);
   const [battleFilter, setBattleFilter] = useState<'all' | 'open' | 'running'>('all');
   const [nowTick, setNowTick] = useState(() => Date.now());
+
+  const savedPhoneValid = useMemo(
+    () => validateRequiredBattlePhone(playerPhone ?? '').valid,
+    [playerPhone]
+  );
+
+  useEffect(() => {
+    if (playerPhone) {
+      setPhoneInput(playerPhone);
+    }
+  }, [playerPhone]);
 
   const combinedMyRooms = useMemo(
     () => ({ ...myRooms, ...hostedRooms }),
@@ -104,6 +120,7 @@ export function MatchmakerHub({
   );
 
   const amountInputRef = useRef<HTMLInputElement | null>(null);
+  const phoneInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let timer: number | undefined;
@@ -174,9 +191,18 @@ export function MatchmakerHub({
       return;
     }
 
+    const phoneCheck = validateRequiredBattlePhone(
+      savedPhoneValid ? playerPhone ?? '' : phoneInput
+    );
+    if (!phoneCheck.valid) {
+      setErrorMsg(phoneCheck.error || 'Phone number is required to create a battle.');
+      phoneInputRef.current?.focus();
+      return;
+    }
+
     setSubmitting(true);
     try {
-      await onCreateBattle(check.value);
+      await onCreateBattle(check.value, phoneCheck.phone);
       setAmountInput('');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to create battle.');
@@ -225,8 +251,10 @@ export function MatchmakerHub({
           <h1 className="font-display text-base sm:text-lg font-bold tracking-tight text-[#16181D]">
             Create Battle
           </h1>
-          <span className="text-[11px] font-semibold text-[#3F2915]">
-            Ludo Classic · 1v1
+          <span className="text-[11px] font-semibold text-[#3F2915] tabular-nums truncate">
+            {savedPhoneValid && playerPhone
+              ? `Mobile: ${formatIndianMobile(playerPhone)}`
+              : 'Ludo Classic · 1v1'}
           </span>
         </div>
 
@@ -249,9 +277,32 @@ export function MatchmakerHub({
                 setAmountInput(e.target.value);
                 if (errorMsg) setErrorMsg(null);
               }}
-              placeholder="Battle Amount (₹)"
-              className="min-w-0 min-h-[40px] flex-1 rounded-xl bg-white/95 px-3 py-1.5 text-base sm:text-sm font-semibold text-[#16181D] placeholder:font-normal placeholder:text-[#8C8F96] shadow-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#16181D]/25 tabular-nums"
+              placeholder={savedPhoneValid ? 'Battle Amount (₹)' : 'Amount (₹)'}
+              className="min-w-[94px] min-h-[40px] flex-1 rounded-xl bg-white/95 px-2.5 sm:px-3 py-1.5 text-sm font-semibold text-[#16181D] placeholder:font-normal placeholder:text-[#8C8F96] shadow-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#16181D]/25 tabular-nums"
             />
+            {!savedPhoneValid && (
+              <>
+                <label htmlFor="battle-phone" className="sr-only">
+                  10-digit Mobile Number (Required)
+                </label>
+                <input
+                  ref={phoneInputRef}
+                  id="battle-phone"
+                  data-testid="battle-phone-input"
+                  name="phone"
+                  type="tel"
+                  inputMode="numeric"
+                  maxLength={14}
+                  value={phoneInput}
+                  onChange={(e) => {
+                    setPhoneInput(e.target.value);
+                    if (errorMsg) setErrorMsg(null);
+                  }}
+                  placeholder="Mobile No. *"
+                  className="min-w-0 min-h-[40px] w-[114px] sm:w-[165px] rounded-xl bg-white/95 px-2.5 sm:px-3 py-1.5 text-sm font-semibold text-[#16181D] placeholder:font-normal placeholder:text-[#8C8F96] shadow-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#16181D]/25 tabular-nums"
+                />
+              </>
+            )}
             <button
               type="submit"
               disabled={submitting}

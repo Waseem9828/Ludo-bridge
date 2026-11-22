@@ -10,6 +10,10 @@ import {
   type AdminStoreState,
 } from './admin';
 import type { AuthStoreState } from './auth';
+import {
+  createInitialSeededBattleProfiles,
+  type BattleUserProfile,
+} from './battleProfiles';
 import type { KycStoreState } from './imbAadhaarKyc';
 
 export interface StoreState {
@@ -18,6 +22,7 @@ export interface StoreState {
   adminState?: AdminStoreState;
   authState?: AuthStoreState;
   kycState?: KycStoreState;
+  battleProfiles?: BattleUserProfile[];
 }
 
 export function createInitialMockStore(now = Date.now()): StoreState {
@@ -492,6 +497,7 @@ export function createInitialMockStore(now = Date.now()): StoreState {
     rooms,
     recentMatches,
     adminState: createInitialAdminStore(now),
+    battleProfiles: createInitialSeededBattleProfiles(now),
   };
 }
 

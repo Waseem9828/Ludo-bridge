@@ -80,6 +80,17 @@ import {
   type KycStoreState,
 } from './src/shared/imbAadhaarKyc';
 import { SlidingWindowRateLimiter } from './src/shared/rateLimit';
+import {
+  captureProfilesFromBattlesBatch,
+  ensureBattleProfilesStore,
+  extractCaptureInputFromMatchRoom,
+  extractNormalizedPhone,
+  updateBattleProfilePhone,
+  validateRequiredBattlePhone,
+  type BattleProfileCaptureInput,
+  type BattleProfileSource,
+  type BattleUserProfile,
+} from './src/shared/battleProfiles';
 
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = path.resolve(process.cwd(), '.data');
@@ -108,6 +119,7 @@ function loadStore(): StoreState {
         adminState: ensureAdminStore(parsed.adminState),
         authState: ensureAuthStore(parsed.authState),
         kycState: ensureKycStore(parsed.kycState),
+        battleProfiles: ensureBattleProfilesStore(parsed.battleProfiles),
       };
     }
   } catch (err) {
@@ -125,6 +137,9 @@ if (!store.authState) {
 }
 if (!store.kycState) {
   store.kycState = ensureKycStore(null);
+}
+if (!store.battleProfiles) {
+  store.battleProfiles = ensureBattleProfilesStore(null);
 }
 
 function persistStore(): void {
@@ -196,6 +211,104 @@ function getKycStore(): KycStoreState {
     store.kycState = ensureKycStore(null);
   }
   return store.kycState;
+}
+
+function getBattleProfilesStore(): BattleUserProfile[] {
+  if (!Array.isArray(store.battleProfiles)) {
+    store.battleProfiles = ensureBattleProfilesStore(null);
+  }
+  return store.battleProfiles;
+}
+
+function buildKnownPhonesLookup(): Record<string, string> {
+  const lookup: Record<string, string> = {};
+  const auth = getAuthStore();
+  for (const user of Object.values(auth.usersByMobile)) {
+    const phoneCheck = extractNormalizedPhone(user.mobile);
+    if (!phoneCheck.valid) continue;
+    if (user.id) lookup[user.id] = phoneCheck.phone;
+    const nameKey = user.name.trim().toLowerCase();
+    if (nameKey && !lookup[nameKey]) lookup[nameKey] = phoneCheck.phone;
+  }
+
+  const admin = getAdminStore();
+  for (const player of admin.players) {
+    const phoneCheck = extractNormalizedPhone(player.phoneOrTag);
+    if (!phoneCheck.valid) continue;
+    if (player.id && !lookup[player.id]) lookup[player.id] = phoneCheck.phone;
+    const nameKey = player.name.trim().toLowerCase();
+    if (nameKey && !lookup[nameKey]) lookup[nameKey] = phoneCheck.phone;
+  }
+  return lookup;
+}
+
+function syncProfilePhoneToAdminPlayers(profile: BattleUserProfile): void {
+  if (!profile.phone) return;
+  const admin = getAdminStore();
+  const nameLower = profile.name.trim().toLowerCase();
+  const existing = admin.players.find(
+    (p) =>
+      (profile.userId && p.id === profile.userId) ||
+      extractNormalizedPhone(p.phoneOrTag).phone === profile.phone ||
+      p.name.trim().toLowerCase() === nameLower
+  );
+  if (existing) {
+    if (!extractNormalizedPhone(existing.phoneOrTag).valid) {
+      existing.phoneOrTag = profile.formattedPhone;
+    }
+    return;
+  }
+  if (admin.players.length < 300) {
+    admin.players.unshift({
+      id: profile.userId || profile.id,
+      name: profile.name,
+      phoneOrTag: profile.formattedPhone,
+      walletBalance: profile.walletBalance ?? 0,
+      xp: 0,
+      level: 1,
+      matchesPlayed: profile.battlesCount,
+      wins: 0,
+      totalPenalties: 0,
+      status: 'active',
+      joinedAt: profile.firstSeenAt,
+      referralCode: profile.referralCode,
+    });
+  }
+}
+
+function enrichAndCaptureBattleProfiles(
+  inputs: BattleProfileCaptureInput[],
+  nowIso = new Date().toISOString()
+): { profiles: BattleUserProfile[]; addedCount: number; updatedCount: number } {
+  const knownPhones = buildKnownPhonesLookup();
+  const enriched: BattleProfileCaptureInput[] = inputs.map((battle) => ({
+    ...battle,
+    participants: battle.participants.map((participant) => {
+      const existingPhone = extractNormalizedPhone(participant.phone).phone;
+      const lookupPhone =
+        (participant.userId ? knownPhones[participant.userId] : '') ||
+        knownPhones[participant.name.trim().toLowerCase()] ||
+        (participant.username
+          ? knownPhones[participant.username.trim().toLowerCase()]
+          : '') ||
+        '';
+      return {
+        ...participant,
+        phone: existingPhone || lookupPhone,
+      };
+    }),
+  }));
+
+  const result = captureProfilesFromBattlesBatch(
+    getBattleProfilesStore(),
+    enriched,
+    nowIso
+  );
+  store.battleProfiles = result.profiles;
+  for (const profile of result.profiles.slice(0, 30)) {
+    syncProfilePhoneToAdminPlayers(profile);
+  }
+  return result;
 }
 
 function resolveAuthenticatedUser(req: Request): AuthUserAccount | null {
@@ -401,7 +514,12 @@ async function startServer() {
   });
 
   app.use('/api', (req, res, next) => {
-    if (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE') {
+    if (
+      req.method === 'POST' ||
+      req.method === 'PUT' ||
+      req.method === 'PATCH' ||
+      req.method === 'DELETE'
+    ) {
       const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
       const decision = apiWriteLimiter.consume(`write:${clientIp}`);
       if (!decision.allowed) {
@@ -542,6 +660,24 @@ async function startServer() {
     };
 
     store.rooms[code] = room;
+    const authUser = resolveAuthenticatedUser(req);
+    const reqPhone = extractNormalizedPhone(
+      req.body?.playerPhone ?? req.body?.phone ?? authUser?.mobile
+    ).phone;
+    const knownPhonesByIdOrName: Record<string, string> = {};
+    if (reqPhone) {
+      knownPhonesByIdOrName[playerId] = reqPhone;
+      knownPhonesByIdOrName[nameCheck.value.toLowerCase()] = reqPhone;
+    }
+    enrichAndCaptureBattleProfiles(
+      [
+        extractCaptureInputFromMatchRoom(room, {
+          source: 'battle_create',
+          knownPhonesByIdOrName,
+        }),
+      ],
+      now
+    );
     persistStore();
     broadcastHub();
     res.status(201).json({ room, playerId });
@@ -594,6 +730,25 @@ async function startServer() {
         createdAt: now,
       });
 
+      const authUser = resolveAuthenticatedUser(req);
+      const reqPhone = extractNormalizedPhone(
+        req.body?.playerPhone ?? req.body?.phone ?? authUser?.mobile
+      ).phone;
+      const knownPhonesByIdOrName: Record<string, string> = {};
+      if (reqPhone) {
+        knownPhonesByIdOrName[playerId] = reqPhone;
+        knownPhonesByIdOrName[nameCheck.value.toLowerCase()] = reqPhone;
+      }
+      enrichAndCaptureBattleProfiles(
+        [
+          extractCaptureInputFromMatchRoom(candidate, {
+            source: 'battle_join',
+            knownPhonesByIdOrName,
+          }),
+        ],
+        now
+      );
+
       persistStore();
       broadcastRoom(candidate);
       broadcastHub();
@@ -641,6 +796,24 @@ async function startServer() {
     };
 
     store.rooms[code] = room;
+    const authUser = resolveAuthenticatedUser(req);
+    const reqPhone = extractNormalizedPhone(
+      req.body?.playerPhone ?? req.body?.phone ?? authUser?.mobile
+    ).phone;
+    const knownPhonesByIdOrName: Record<string, string> = {};
+    if (reqPhone) {
+      knownPhonesByIdOrName[playerId] = reqPhone;
+      knownPhonesByIdOrName[nameCheck.value.toLowerCase()] = reqPhone;
+    }
+    enrichAndCaptureBattleProfiles(
+      [
+        extractCaptureInputFromMatchRoom(room, {
+          source: 'battle_create',
+          knownPhonesByIdOrName,
+        }),
+      ],
+      now
+    );
     persistStore();
     broadcastHub();
     res.status(201).json({ room, playerId, matched: false });
@@ -716,6 +889,25 @@ async function startServer() {
       kind: 'system',
       createdAt: now,
     });
+
+    const authUser = resolveAuthenticatedUser(req);
+    const reqPhone = extractNormalizedPhone(
+      req.body?.playerPhone ?? req.body?.phone ?? authUser?.mobile
+    ).phone;
+    const knownPhonesByIdOrName: Record<string, string> = {};
+    if (reqPhone) {
+      knownPhonesByIdOrName[playerId] = reqPhone;
+      knownPhonesByIdOrName[nameCheck.value.toLowerCase()] = reqPhone;
+    }
+    enrichAndCaptureBattleProfiles(
+      [
+        extractCaptureInputFromMatchRoom(room, {
+          source: 'battle_join',
+          knownPhonesByIdOrName,
+        }),
+      ],
+      now
+    );
 
     persistStore();
     broadcastRoom(room);
@@ -2054,6 +2246,169 @@ async function startServer() {
       withdrawal: result.withdrawal,
       withdrawals: playerWithdrawals,
     });
+  });
+
+  // --- Battle User Profiles Directory API (Auto-Captured + Phone Required) ---
+  app.get('/api/admin/battle-profiles', (_req, res) => {
+    res.json({ profiles: getBattleProfilesStore() });
+  });
+
+  app.post('/api/admin/battle-profiles/capture', (req, res) => {
+    const rawBattles = req.body?.battles;
+    if (!Array.isArray(rawBattles) || rawBattles.length === 0) {
+      res.status(400).json({ error: 'Provide at least one battle entry to capture.' });
+      return;
+    }
+    if (rawBattles.length > 100) {
+      res.status(400).json({ error: 'Maximum 100 battles can be captured per request.' });
+      return;
+    }
+
+    const requirePhone = req.body?.requirePhone === true;
+    const VALID_SOURCES = new Set<BattleProfileSource>([
+      'live_socket',
+      'battle_create',
+      'battle_join',
+      'manual_update',
+    ]);
+
+    const sanitizedBattles: BattleProfileCaptureInput[] = [];
+    for (const rawBattle of rawBattles) {
+      if (!rawBattle || typeof rawBattle !== 'object') continue;
+      const b = rawBattle as Record<string, unknown>;
+      const battleCode = String(b.battleCode ?? '').trim().slice(0, 64);
+      const rawParticipants = Array.isArray(b.participants) ? b.participants.slice(0, 4) : [];
+      if (!battleCode || rawParticipants.length === 0) continue;
+
+      const participants: BattleProfileCaptureInput['participants'] = [];
+      for (const rawP of rawParticipants) {
+        if (!rawP || typeof rawP !== 'object') continue;
+        const p = rawP as Record<string, unknown>;
+        const name = String(p.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 40);
+        const username =
+          typeof p.username === 'string'
+            ? p.username.trim().replace(/\s+/g, ' ').slice(0, 40)
+            : undefined;
+        const phoneStr = typeof p.phone === 'string' ? p.phone.trim().slice(0, 24) : '';
+        if (!name && !username) continue;
+
+        if (requirePhone) {
+          const phoneCheck = validateRequiredBattlePhone(phoneStr);
+          if (!phoneCheck.valid) {
+            res.status(400).json({
+              error: phoneCheck.error || 'A valid 10-digit mobile number is required.',
+            });
+            return;
+          }
+        }
+
+        participants.push({
+          userId:
+            typeof p.userId === 'string' && p.userId.trim()
+              ? p.userId.trim().slice(0, 64)
+              : undefined,
+          name: name || username || 'Player',
+          username: username || undefined,
+          phone: phoneStr || undefined,
+          avatarId:
+            typeof p.avatarId === 'string' ? p.avatarId.trim().slice(0, 32) : undefined,
+          profileImage:
+            typeof p.profileImage === 'string'
+              ? p.profileImage.trim().slice(0, 180)
+              : undefined,
+          referralCode:
+            typeof p.referralCode === 'string'
+              ? p.referralCode.trim().slice(0, 32)
+              : undefined,
+          walletBalance:
+            typeof p.walletBalance === 'number' && Number.isFinite(p.walletBalance)
+              ? Math.max(0, Math.round(p.walletBalance))
+              : undefined,
+          isKycVerified:
+            typeof p.isKycVerified === 'boolean' ? p.isKycVerified : undefined,
+          role: p.role === 'opponent' ? 'opponent' : 'host',
+        });
+      }
+
+      if (participants.length === 0) continue;
+      const rawSource = typeof b.source === 'string' ? b.source : 'live_socket';
+      const source: BattleProfileSource = VALID_SOURCES.has(rawSource as BattleProfileSource)
+        ? (rawSource as BattleProfileSource)
+        : 'live_socket';
+      const parsedAmount = Number(b.amount ?? 0);
+
+      sanitizedBattles.push({
+        battleCode,
+        amount: Number.isFinite(parsedAmount)
+          ? Math.max(0, Math.min(1_000_000, Math.round(parsedAmount)))
+          : 0,
+        mode: parseMode(b.mode),
+        createdAt:
+          typeof b.createdAt === 'string' && !Number.isNaN(Date.parse(b.createdAt))
+            ? b.createdAt
+            : new Date().toISOString(),
+        source,
+        participants,
+      });
+    }
+
+    if (sanitizedBattles.length === 0) {
+      res.status(400).json({ error: 'No valid battle participant profiles found in payload.' });
+      return;
+    }
+
+    const result = enrichAndCaptureBattleProfiles(
+      sanitizedBattles,
+      new Date().toISOString()
+    );
+    persistStore();
+    res.json({
+      ok: true,
+      profiles: result.profiles,
+      addedCount: result.addedCount,
+      updatedCount: result.updatedCount,
+    });
+  });
+
+  app.patch('/api/admin/battle-profiles/:id/phone', (req, res) => {
+    const profileId = String(req.params.id ?? '').trim().slice(0, 80);
+    if (!profileId) {
+      res.status(400).json({ error: 'Invalid battle profile ID.' });
+      return;
+    }
+    const rawPhone = String(req.body?.phone ?? '').trim();
+    const updated = updateBattleProfilePhone(
+      getBattleProfilesStore(),
+      profileId,
+      rawPhone,
+      new Date().toISOString()
+    );
+    if (updated.error || !updated.updatedProfile) {
+      const status = updated.error === 'Battle user profile not found.' ? 404 : 400;
+      res.status(status).json({ error: updated.error || 'Unable to update phone number.' });
+      return;
+    }
+    store.battleProfiles = updated.profiles;
+    syncProfilePhoneToAdminPlayers(updated.updatedProfile);
+    persistStore();
+    res.json({
+      ok: true,
+      profile: updated.updatedProfile,
+      profiles: updated.profiles,
+    });
+  });
+
+  app.delete('/api/admin/battle-profiles/:id', (req, res) => {
+    const profileId = String(req.params.id ?? '').trim().slice(0, 80);
+    const current = getBattleProfilesStore();
+    const exists = current.some((p) => p.id === profileId);
+    if (!exists) {
+      res.status(404).json({ error: 'Battle user profile not found.' });
+      return;
+    }
+    store.battleProfiles = current.filter((p) => p.id !== profileId);
+    persistStore();
+    res.json({ ok: true, profiles: store.battleProfiles });
   });
 
   // Forward any unhandled /api calls directly to live MKG backend

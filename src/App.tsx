@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminPanelPage } from './components/AdminPanelPage';
 import { fetchPlayerDeposits } from './api/adminClient';
+import { captureBattleProfilesOnServer } from './api/battleProfilesClient';
 import { fetchLiveWallet, requestLiveChallenges } from './api/liveBackendClient';
 import {
   fetchCurrentAuthUser,
@@ -58,6 +59,11 @@ import {
   type WalletTransaction,
 } from './shared/matchmaking';
 import {
+  extractCaptureInputFromMatchRoom,
+  extractNormalizedPhone,
+  validateRequiredBattlePhone,
+} from './shared/battleProfiles';
+import {
   deriveAppNotifications,
   getUnreadNotificationCount,
   type AppNotification,
@@ -70,6 +76,7 @@ import {
 } from './utils/soundEffects';
 
 const PLAYER_NAME_KEY = 'ludobridge.playerName';
+const PLAYER_PHONE_KEY = 'ludobridge.playerPhone';
 const PLAYER_AVATAR_KEY = 'ludobridge.avatarId';
 const ACTIVE_SESSION_KEY = 'ludobridge.activeSession';
 const HOSTED_ROOMS_KEY = 'ludobridge.hostedRooms';
@@ -108,6 +115,7 @@ const ROUTE_TO_PATH: Record<Exclude<AppViewRoute, 'room'>, string> = {
   'gst-policy': '/gst-policy',
   'refund-policy': '/refund-policy',
   admin: '/admin',
+  'battle-profiles': '/admin?tab=battle-profiles',
   login: '/login',
   signup: '/signup',
 };
@@ -172,7 +180,12 @@ function parseRouteFromLocation(): ParsedRoute {
   if (pathname === '/terms') return { view: 'terms', roomCode: '', joinCode: '' };
   if (pathname === '/gst-policy') return { view: 'gst-policy', roomCode: '', joinCode: '' };
   if (pathname === '/refund-policy') return { view: 'refund-policy', roomCode: '', joinCode: '' };
-  if (pathname === '/admin') return { view: 'admin', roomCode: '', joinCode: '' };
+  if (pathname === '/admin') {
+    if (params.get('tab') === 'battle-profiles') {
+      return { view: 'battle-profiles', roomCode: '', joinCode: '' };
+    }
+    return { view: 'admin', roomCode: '', joinCode: '' };
+  }
   if (pathname === '/login') return { view: 'login', roomCode: '', joinCode: '' };
   if (pathname === '/signup') return { view: 'signup', roomCode: '', joinCode: '' };
 
@@ -190,6 +203,16 @@ function getOrCreatePlayerName(): string {
     return generated;
   } catch {
     return 'Player 101';
+  }
+}
+
+function getSavedPlayerPhone(): string {
+  try {
+    const raw = window.localStorage.getItem(PLAYER_PHONE_KEY)?.trim() ?? '';
+    const check = extractNormalizedPhone(raw);
+    return check.valid ? check.phone : '';
+  } catch {
+    return '';
   }
 }
 
@@ -440,6 +463,9 @@ export default function App() {
   const [playerName, setPlayerName] = useState<string>(
     () => readStoredAuthSession()?.user.name ?? getOrCreatePlayerName()
   );
+  const [playerPhone, setPlayerPhone] = useState<string>(
+    () => readStoredAuthSession()?.user.mobile ?? getSavedPlayerPhone()
+  );
   const [avatarId, setAvatarId] = useState<AvatarId>(
     () => readStoredAuthSession()?.user.avatarId ?? getOrCreateAvatarId()
   );
@@ -507,6 +533,21 @@ export default function App() {
     setPlayerName(name);
     try {
       window.localStorage.setItem(PLAYER_NAME_KEY, name);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  const handleSavePlayerPhone = useCallback((rawPhone: string) => {
+    const check = extractNormalizedPhone(rawPhone);
+    const cleaned = check.valid ? check.phone : '';
+    setPlayerPhone(cleaned);
+    try {
+      if (cleaned) {
+        window.localStorage.setItem(PLAYER_PHONE_KEY, cleaned);
+      } else {
+        window.localStorage.removeItem(PLAYER_PHONE_KEY);
+      }
     } catch {
       // ignore storage errors
     }
@@ -999,7 +1040,17 @@ export default function App() {
     }
   };
 
-  const handleCreateBattle = async (amount: number) => {
+  const handleCreateBattle = async (amount: number, phoneOverride?: string) => {
+    const phoneCheck = validateRequiredBattlePhone(
+      phoneOverride || playerPhone || authSession?.user?.mobile || ''
+    );
+    if (!phoneCheck.valid) {
+      throw new Error(
+        phoneCheck.error || 'A valid 10-digit mobile number is required to create a battle.'
+      );
+    }
+    handleSavePlayerPhone(phoneCheck.phone);
+
     const combinedRooms = new Map<string, MatchRoomType>();
     for (const r of [...hub.openLobbies, ...hub.runningBattles]) {
       combinedRooms.set(r.code, r);
@@ -1035,6 +1086,15 @@ export default function App() {
       ...prev,
       [room.code]: playerId,
     }));
+    void captureBattleProfilesOnServer([
+      extractCaptureInputFromMatchRoom(room, {
+        source: 'battle_create',
+        knownPhonesByIdOrName: {
+          [playerId]: phoneCheck.phone,
+          [playerName.trim().toLowerCase()]: phoneCheck.phone,
+        },
+      }),
+    ]).catch(() => {});
     playSound('matchCreated');
     fetchHubSnapshot().then(setHub).catch(() => {});
   };
@@ -1086,6 +1146,20 @@ export default function App() {
       [room.code]: playerId,
     }));
     writeStoredSession({ roomCode: room.code, playerId });
+    const resolvedJoinPhone = extractNormalizedPhone(
+      playerPhone || authSession?.user?.mobile || ''
+    ).phone;
+    const knownJoinPhones: Record<string, string> = {};
+    if (resolvedJoinPhone) {
+      knownJoinPhones[playerId] = resolvedJoinPhone;
+      knownJoinPhones[playerName.trim().toLowerCase()] = resolvedJoinPhone;
+    }
+    void captureBattleProfilesOnServer([
+      extractCaptureInputFromMatchRoom(room, {
+        source: 'battle_join',
+        knownPhonesByIdOrName: knownJoinPhones,
+      }),
+    ]).catch(() => {});
     playSound('lobbyEnter');
     setHub((prev) => ({
       ...prev,
@@ -1184,6 +1258,7 @@ export default function App() {
     ({ user, token }: { user: StoredAuthSession['user']; token: string }) => {
       setAuthSession({ user, token });
       handleSavePlayerName(user.name);
+      handleSavePlayerPhone(user.mobile);
       handleSaveAvatar(user.avatarId);
       void fetchLiveWallet(token).then((w) => {
         if (w) {
@@ -1197,7 +1272,7 @@ export default function App() {
         setLoadingHub(false);
       }).catch(() => {});
     },
-    [handleSaveAvatar, handleSavePlayerName, navigateToRoute]
+    [handleSaveAvatar, handleSavePlayerName, handleSavePlayerPhone, navigateToRoute]
   );
 
   const handleLogout = useCallback(() => {
@@ -1228,6 +1303,7 @@ export default function App() {
         if (res && res.user) {
           setAuthSession({ user: res.user, token: res.token });
           handleSavePlayerName(res.user.name);
+          handleSavePlayerPhone(res.user.mobile);
           handleSaveAvatar(res.user.avatarId);
         }
         void fetchLiveWallet(token).then((w) => {
@@ -1240,11 +1316,12 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [authSession?.token, handleSaveAvatar, handleSavePlayerName]);
+  }, [authSession?.token, handleSaveAvatar, handleSavePlayerName, handleSavePlayerPhone]);
 
-  if (view === 'admin') {
+  if (view === 'admin' || view === 'battle-profiles') {
     return (
       <AdminPanelPage
+        initialTab={view === 'battle-profiles' ? 'battle-profiles' : 'overview'}
         onExitAdmin={() => navigateToRoute('home')}
         hubSnapshot={hub}
         authToken={authSession?.token ?? null}
@@ -1384,6 +1461,7 @@ export default function App() {
             hostedRooms={hostedRooms}
             myRooms={myRooms}
             playerName={playerName}
+            playerPhone={authSession?.user?.mobile || playerPhone}
             playerAvatarId={avatarId}
             onCreateBattle={handleCreateBattle}
             onJoinLobby={handleJoinLobby}
@@ -1431,10 +1509,12 @@ export default function App() {
         ) : view === 'profile' ? (
           <ProfilePage
             playerName={playerName}
+            playerPhone={authSession?.user?.mobile || playerPhone}
             avatarId={avatarId}
             hub={hub}
             authUser={authSession?.user ?? null}
             onSavePlayerName={handleSavePlayerName}
+            onSavePlayerPhone={handleSavePlayerPhone}
             onSaveAvatar={handleSaveAvatar}
             onOpenLeaderboard={() => navigateToRoute('leaderboard')}
             onNavigateLogin={() => navigateToRoute('login')}

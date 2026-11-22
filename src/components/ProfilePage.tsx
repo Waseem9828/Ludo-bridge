@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Check, LogIn, LogOut, Phone, Trophy, UserPlus } from 'lucide-react';
 import { AVATAR_OPTIONS } from '../assets/avatars';
 import { formatIndianMobile, type AuthUserAccount } from '../shared/auth';
+import { validateRequiredBattlePhone } from '../shared/battleProfiles';
 import {
   validatePlayerName,
   type AvatarId,
@@ -12,10 +13,12 @@ import { PlayerAvatar } from './PlayerAvatar';
 
 interface ProfilePageProps {
   playerName: string;
+  playerPhone?: string;
   avatarId: AvatarId;
   hub: HubSnapshot;
   authUser?: AuthUserAccount | null;
   onSavePlayerName: (name: string) => void;
+  onSavePlayerPhone?: (phone: string) => void;
   onSaveAvatar: (avatarId: AvatarId) => void;
   onOpenLeaderboard: () => void;
   onNavigateLogin?: () => void;
@@ -25,10 +28,12 @@ interface ProfilePageProps {
 
 export function ProfilePage({
   playerName,
+  playerPhone,
   avatarId,
   hub,
   authUser,
   onSavePlayerName,
+  onSavePlayerPhone,
   onSaveAvatar,
   onOpenLeaderboard,
   onNavigateLogin,
@@ -38,6 +43,12 @@ export function ProfilePage({
   const [nameInput, setNameInput] = useState(playerName);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState(false);
+
+  const [phoneInput, setPhoneInput] = useState(authUser?.mobile || playerPhone || '');
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [phoneSavedNotice, setPhoneSavedNotice] = useState(false);
+
+  const activePhone = authUser?.mobile || playerPhone || '';
 
   const playerMatches = hub.recentMatches.filter(
     (m) => m.player1Name === playerName || m.player2Name === playerName
@@ -62,6 +73,23 @@ export function ProfilePage({
     window.setTimeout(() => setSavedNotice(false), 2500);
   };
 
+  const handlePhoneSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    setPhoneError(null);
+    setPhoneSavedNotice(false);
+
+    const check = validateRequiredBattlePhone(phoneInput);
+    if (!check.valid) {
+      setPhoneError(check.error || 'Enter a valid 10-digit mobile number.');
+      return;
+    }
+
+    onSavePlayerPhone?.(check.phone);
+    setPhoneInput(check.phone);
+    setPhoneSavedNotice(true);
+    window.setTimeout(() => setPhoneSavedNotice(false), 2500);
+  };
+
   return (
     <div className="w-full px-4 py-5 sm:px-8 sm:py-8 space-y-6" data-testid="profile-page">
       <PageTitleHeading title="Profile" />
@@ -79,8 +107,13 @@ export function ProfilePage({
                       <Phone className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                       <span>{formatIndianMobile(authUser.mobile)} · Verified</span>
                     </>
+                  ) : activePhone ? (
+                    <>
+                      <Phone className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      <span>{formatIndianMobile(activePhone)} · Battle Phone Saved</span>
+                    </>
                   ) : (
-                    <span>Guest Player · Verify mobile via OTP</span>
+                    <span>Guest Player · Add mobile number for battles</span>
                   )}
                 </p>
               </div>
@@ -204,6 +237,49 @@ export function ProfilePage({
               </div>
             )}
           </form>
+
+          {!authUser && onSavePlayerPhone && (
+            <form onSubmit={handlePhoneSubmit} className="space-y-2.5" noValidate>
+              <label htmlFor="profile-phone" className="block text-xs font-semibold text-[#3F2915]">
+                Mobile Number (Required for Battles)
+              </label>
+              <div className="flex min-w-0 flex-row items-center gap-2.5">
+                <input
+                  id="profile-phone"
+                  data-testid="profile-phone-input"
+                  type="tel"
+                  inputMode="numeric"
+                  maxLength={14}
+                  value={phoneInput}
+                  onChange={(e) => {
+                    setPhoneInput(e.target.value);
+                    if (phoneError) setPhoneError(null);
+                  }}
+                  placeholder="10-digit mobile number"
+                  className="w-full min-w-0 min-h-[46px] flex-1 rounded-xl bg-white/95 px-3.5 sm:px-4 py-2.5 text-base sm:text-sm font-semibold text-[#16181D] placeholder:text-[#8C8F96] shadow-sm focus:bg-white focus:outline-none tabular-nums"
+                />
+                <button
+                  type="submit"
+                  data-testid="profile-save-phone-btn"
+                  className="min-h-[46px] inline-flex items-center gap-1.5 rounded-full bg-[#064E3B] px-4 sm:px-5 py-2.5 text-xs font-bold text-white shadow-pill-btn hover:bg-[#0D7A5F] whitespace-nowrap shrink-0"
+                >
+                  {phoneSavedNotice ? (
+                    <>
+                      <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Saved</span>
+                    </>
+                  ) : (
+                    <span>Save Phone</span>
+                  )}
+                </button>
+              </div>
+              {phoneError && (
+                <div role="alert" className="rounded-xl bg-[#991B1B] px-3.5 py-2 text-xs font-medium text-white">
+                  {phoneError}
+                </div>
+              )}
+            </form>
+          )}
         </section>
 
         <section className="min-w-0 md:col-span-5 flex flex-col justify-between rounded-2xl bg-gradient-to-br from-[#0D7458] via-[#064E3B] to-[#032D22] p-5 sm:p-6 text-white shadow-emerald-card space-y-4">

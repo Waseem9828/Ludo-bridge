@@ -7,6 +7,7 @@ import {
   Home,
   LogIn,
   LogOut,
+  Phone,
   Receipt,
   RotateCcw,
   ShieldCheck,
@@ -37,6 +38,7 @@ export type AppViewRoute =
   | 'gst-policy'
   | 'refund-policy'
   | 'admin'
+  | 'battle-profiles'
   | 'login'
   | 'signup';
 
@@ -287,6 +289,25 @@ export function SidebarDrawer({
                 aria-hidden="true"
               />
               <span>Admin Panel</span>
+            </a>
+            <a
+              href="/admin?tab=battle-profiles"
+              data-testid="sidebar-battle-profiles-link"
+              onClick={(e) => {
+                e.preventDefault();
+                handleSelect('battle-profiles');
+              }}
+              className={`flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-colors ${
+                currentView === 'battle-profiles'
+                  ? 'bg-[#0D7A5F] text-white shadow-xs'
+                  : 'text-[#16181D] hover:bg-white'
+              }`}
+            >
+              <Phone
+                className={`h-4 w-4 shrink-0 ${currentView === 'battle-profiles' ? 'text-white' : 'text-[#0D7A5F]'}`}
+                aria-hidden="true"
+              />
+              <span>Battle Profiles</span>
             </a>
           </div>
 
